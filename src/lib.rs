@@ -2,7 +2,7 @@
 extern crate pnet;
 
 
-use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
+use pnet::packet::ethernet::{EtherType, EtherTypes, EthernetPacket};
 use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::ipv4::Ipv4Packet;
 use pnet::packet::ipv6::Ipv6Packet;
@@ -11,10 +11,57 @@ use pnet::packet::Packet;
 
 use pcap::Capture;
 
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::IpAddr;
 use std::os::raw::c_char;
 use std::path::Path;
+
+
+pub struct FlowTuple{
+    src_ip: EtherType,
+    dst_ip: EtherType,
+    src_port: u16,
+    dst_port: u16,
+}
+
+
+pub struct SSLData {
+    client_key: Vec<u8>,
+    server_key: Vec<u8>,
+    signature: Vec<u8>,
+    cert: Vec<u8>,
+}
+
+pub type SSLFlowMap = HashMap<FlowTuple, SSLData>;
+
+pub struct SSLFlows {
+    map: SSLFlowMap,
+}
+
+impl SSLFlows {
+    /* 
+     * Keep track of the data from the SSL flows in a batch of records
+     * indexing by connection 4-tuple. 
+     *
+     * Track the relevant information as it is detected in packets,
+     * and update it as it is found across packets (certs specifically)
+     */
+    pub fn new()-> Option<SSLFlows> {
+        return SSLFLows{
+            map: SSLFlowMap{},
+        };
+    }
+
+    
+    pub fn add() -> bool{
+        return true;
+    }
+
+    pub fn clean() {}
+
+    pub fn update(){}
+}
 
 #[no_mangle]
 pub extern fn tlsparse_handle_packets(packet_bytes: &[u8], len: u32){
