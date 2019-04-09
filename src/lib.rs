@@ -39,29 +39,29 @@ pub struct SSLFlows {
     map: SSLFlowMap,
 }
 
-impl SSLFlows {
-    /* 
-     * Keep track of the data from the SSL flows in a batch of records
-     * indexing by connection 4-tuple. 
-     *
-     * Track the relevant information as it is detected in packets,
-     * and update it as it is found across packets (certs specifically)
-     */
-    pub fn new()-> Option<SSLFlows> {
-        return SSLFLows{
-            map: SSLFlowMap{},
-        };
-    }
+// impl SSLFlows {
+//     /* 
+//      * Keep track of the data from the SSL flows in a batch of records
+//      * indexing by connection 4-tuple. 
+//      *
+//      * Track the relevant information as it is detected in packets,
+//      * and update it as it is found across packets (certs specifically)
+//      */
+//     pub fn new()-> Option<SSLFlows> {
+//         return SSLFLows{
+//             map: SSLFlowMap{},
+//         };
+//     }
 
     
-    pub fn add() -> bool{
-        return true;
-    }
+//     pub fn add() -> bool{
+//         return true;
+//     }
 
-    pub fn clean() {}
+//     pub fn clean() {}
 
-    pub fn update(){}
-}
+//     pub fn update(){}
+// }
 
 #[no_mangle]
 pub extern fn tlsparse_handle_packets(packet_bytes: &[u8], len: u32){
@@ -203,19 +203,39 @@ fn handle_tls_packet(payload: &[u8]) {
         if slice_to_len(&payload[6..9]) > payload.len(){
            println!(" --> Something's wrong"); 
         } else {
-            println!("Client Hello: {:?}", &payload[10..42]);
+            println!("Client Hello: {:02x?}", &payload[11..43]);
         }
     } else if payload[5] == 0x02 {
         if slice_to_len(&payload[6..9]) > payload.len(){
            println!(" --> Something's wrong"); 
         } else {
-            println!("Server Hello: {:?}", &payload[10..42]);
+            println!("Server Hello: {:02x?}", &payload[11..43]);
+            let session_id_len = *&payload[43] as usize;
+            println!("session_id_len: {}", session_id_len);
+            println!("Cipher Suite: {:02x?}", &payload[44+session_id_len..46+session_id_len]);
         }
     } else {
         println!("BOO"); 
     }
+    println!("Packet contains certificate: {}", contains_certificate(payload));
 }
 
+fn contains_certificate(mut payload: &[u8]) -> bool {
+    // look for all TLS records
+    let mut record = payload[5];
+    while record != 0x0b {
+        // not a certificate record, find next record
+        let record_len = slice_to_len(&payload[3..5]);
+        if record_len+5 >= payload.len() {
+            return false
+        } else {
+            payload = &payload[record_len+5..];
+            record = payload[5];
+        }
+    }
+
+    return true
+}
 
 fn slice_to_len(slice: &[u8]) -> usize{
     let len = slice.len() - 1;
