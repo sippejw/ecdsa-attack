@@ -4,12 +4,14 @@
 
 ## Installing
 ```sh
+# Install dependencies
+sudo apt install libelf-dev build-essential bison flex linux-headers-$(uname -r) libnuma-dev
+
 # pull the repo and submodule (PF_RING) repos
 git clone --recursive-submodules git@github.com:IanMartiny/ecdsa-attack.git
 
 # Build PF_RING
 cd PF_RING
-sudo apt install libelf-dev build-essential bison flex linux-headers-$(uname -r) libnuma-dev
 make
 
 # Build Parser
@@ -17,13 +19,20 @@ cd ../
 make
 ```
 
-TODO: 
-design the system for managing connection flow ssl data split across numerous packets.
-(i.e. client / server public keys, signature, and cert which can be split in many ways).
+## Running 
 
-Consider using:
-- struct that is filled during batch handle and cleared / trash collected at end of batch
-- thread with shared memory or IPC.
+Run simple version off local network interface.
+
+```sh
+./rust-src/target/release/tls_fingerprint <interface name (i.e. eth0)>
+```
+
+
+Run with advanced `PF_Ring` integration. 
+```sh
+TODO
+```
+
 
 
 Useful RFC's
