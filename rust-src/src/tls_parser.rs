@@ -92,6 +92,7 @@ pub enum TlsVersion {
 pub struct ClientHelloFingerprint {
     pub record_tls_version: TlsVersion,
     pub ch_tls_version: TlsVersion,
+    pub client_random: Vec<u8>,
     pub cipher_suites: Vec<u8>,
     pub compression_methods: Vec<u8>,
 
@@ -151,7 +152,9 @@ impl ClientHelloFingerprint {
 
         // 32 bytes of client random
 
-        let mut offset: usize = 43;
+        let mut offset: usize = 11;
+        let c_random = ungrease_u8(&a[offset..offset+32]);
+        offset += 32;
 
         let session_id_len = a[offset] as usize;
         offset += session_id_len + 1;
@@ -186,6 +189,7 @@ impl ClientHelloFingerprint {
         let mut ch = ClientHelloFingerprint {
             record_tls_version: record_tls_version,
             ch_tls_version: ch_tls_version,
+            client_random: c_random,
             cipher_suites: cipher_suites,
             compression_methods: compression_methods,
             extensions: Vec::new(),
@@ -356,9 +360,9 @@ impl ClientHelloFingerprint {
 
 impl fmt::Display for ClientHelloFingerprint {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "record: {:?} ch: {:?} ciphers: {:X} compression: {:X} \
+        write!(f, "record: {:?} ch: {:?} random: {:02x?} ciphers: {:X} compression: {:X} \
         extensions: {:X} curves: {:X} ec_fmt: {:X} sig_algs: {:X} alpn: {:X} sni: {}",
-               self.record_tls_version, self.ch_tls_version,
+               self.record_tls_version, self.ch_tls_version, self.client_random.as_slice(),
                vec_u8_to_vec_u16_be(&self.cipher_suites).as_slice().as_hex(),
                &self.compression_methods.as_slice().as_hex(),
                vec_u8_to_vec_u16_be(&self.extensions).as_slice().as_hex(),
@@ -415,6 +419,7 @@ fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, HelloParseError> {
 pub struct ServerHelloFingerprint {
     pub record_tls_version: TlsVersion,
     pub sh_tls_version: TlsVersion,
+    pub server_random: Vec<u8>,
     pub cipher_suite: u16,
     pub compression_method: u8,
 
@@ -464,7 +469,9 @@ impl ServerHelloFingerprint {
 
         // 32 bytes of client random
 
-        let mut offset: usize = 43;
+        let mut offset: usize = 11;
+        let server_random = ungrease_u8(&a[offset..offset+32]);
+        offset += 32;
 
         let session_id_len = a[offset] as usize;
         offset += session_id_len + 1;
@@ -491,6 +498,7 @@ impl ServerHelloFingerprint {
         let mut sh = ServerHelloFingerprint {
             record_tls_version: record_tls_version,
             sh_tls_version: sh_tls_version,
+            server_random: server_random,
             cipher_suite: cipher_suite,
             compression_method: compression_method,
             extensions: Vec::new(),
@@ -569,9 +577,9 @@ impl ServerHelloFingerprint {
 
 impl fmt::Display for ServerHelloFingerprint {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "record: {:?} sh: {:?} cipher: {:X} compression: {:X} \
+        write!(f, "record: {:?} sh: {:?} random: {:02x?} cipher: {:X} compression: {:X} \
         extensions: {:X} curves: {:X} ec_fmt: {:X} alpn: {:X}",
-               self.record_tls_version, self.sh_tls_version,
+               self.record_tls_version, self.sh_tls_version, self.server_random.as_slice(),
                &self.cipher_suite,
                &self.compression_method,
                vec_u8_to_vec_u16_be(&self.extensions).as_slice().as_hex(),

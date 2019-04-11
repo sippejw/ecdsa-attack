@@ -38,8 +38,8 @@ fn main() {
 
     let mut ft = FlowTracker::new();
 
-    let from_pcap_file = false;
-    let pcap_filename = "TMP";
+    let from_pcap_file = true;
+    let pcap_filename = "data/tls-capture-ecdhe-rsa-pkcs1-sha256.pcap.pcapng";
     if from_pcap_file {
         let mut cap = Capture::from_file(pcap_filename) // open the "default" interface
             .unwrap(); // assume activation worked
@@ -60,7 +60,7 @@ fn main() {
                 }
             }
         }
-    }
+    } else {
 
     // Create a new channel, dealing with layer 2 packets
     let (_, mut rx) = match datalink::channel(&interface, Default::default()) {
@@ -105,5 +105,6 @@ fn main() {
                 println!("[ERROR] An error occurred while reading: {}", e);
             }
         }
+    }
     }
 }
