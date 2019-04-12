@@ -31,7 +31,7 @@ CFLAGS     =  -O2 -DHAVE_PF_RING -Wall ${INCLUDE} -DENABLE_BPF -D HAVE_PF_RING_Z
 # User and System libraries
 #
 DEBUG_OR_RELEASE = release
-LIBS       =  ${LIBPFRING} ${LIBPCAP} `${PFRINGDIR}/pfring_config --libs` -lpthread -lrt -Lrust-src/target/${DEBUG_OR_RELEASE} -ltls_fingerprint -ldl -lm
+LIBS       =  ${LIBPFRING} ${LIBPCAP} `${PFRINGDIR}/pfring_config --libs` -lpthread -lrt -Lrust-src/target/${DEBUG_OR_RELEASE} -ltls_fingerprint -ldl -lm -lcrypto
 
 all: tls-fingerprint
 

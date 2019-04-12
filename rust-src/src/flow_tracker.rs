@@ -14,7 +14,7 @@ use std::mem;
 use std::ops::Sub;
 
 use std::time::{Duration, Instant};
-use tls_parser::{ClientHelloFingerprint, ServerHelloFingerprint};
+use tls_parser::{ClientHelloFingerprint, ServerHelloFingerprint, ServerReturn};
 use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use stats_tracker::{StatsTracker};
 use common::{u8_to_u16_be, u8array_to_u32_be, u8_to_u32_be, TimedFlow, Flow, HelloParseError};
@@ -204,7 +204,7 @@ impl FlowTracker {
         // check for ServerHello
         if !is_client && self.tracked_server_flows.contains_key(&flow) {
             self.stats.sfingerprint_checks += 1;
-            match ServerHelloFingerprint::from_try(tcp_pkt.payload()) {
+            match ServerReturn::from_try(tcp_pkt.payload()) {
                 Ok(fp) => {
                     self.stats.sfingerprints_seen += 1;
                     let sid = fp.get_fingerprint() as i64;
@@ -215,10 +215,11 @@ impl FlowTracker {
                                  sid, cid, fp);
                     }
 
+                    // need to re-write this to handle that fp is now a general return
                     if self.write_to_db {
-                        self.cache.add_sfingerprint(sid, fp);
-                        self.cache.add_smeasurement(cid, sid);
-                        self.cache.update_connection_with_sid(&flow.reversed_clone(), sid);
+                        // self.cache.add_sfingerprint(sid, fp);
+                        // self.cache.add_smeasurement(cid, sid);
+                        // self.cache.update_connection_with_sid(&flow.reversed_clone(), sid);
                     }
                 }
                 Err(err) => {}

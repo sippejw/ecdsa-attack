@@ -22,7 +22,7 @@ pub enum TlsRecordType {
 	Alert            = 21,
 	Handshake        = 22,
 	ApplicationData  = 23,
-	Hearbeat         = 24,
+	Heartbeat         = 24,
 }
 }
 
@@ -81,11 +81,18 @@ enum_from_primitive! {
 #[derive(Debug, Hash, PartialEq, Clone, Copy)]
 pub enum TlsVersion {
     // TODO
+    NONE  = 0x0000,
 	SSL30 = 0x0300,
 	TLS10 = 0x0301,
 	TLS11 = 0x0302,
 	TLS12 = 0x0303,
 }
+}
+
+impl Default for TlsVersion{
+    fn default() -> TlsVersion {
+        TlsVersion::NONE
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -415,7 +422,37 @@ fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, HelloParseError> {
     Ok(res)
 }
 
-#[derive(Debug, PartialEq)]
+pub trait ServerHelloAccessors {
+    fn set_record_tls_version(&mut self, TlsVersion);
+    fn get_record_tls_version(&self) -> Option<TlsVersion>;
+
+    fn set_sh_tls_version(&mut self, TlsVersion);
+    fn get_sh_tls_version(&self) -> Option<TlsVersion>;
+
+    fn set_server_random(&mut self, Vec<u8>);
+    fn get_server_random(&self) -> Option<&Vec<u8>>;
+
+    fn set_cipher_suite(&mut self, u16);
+    fn get_cipher_suite(&self) -> Option<u16>;
+
+    fn set_compression_method(&mut self, u8);
+    fn get_compression_method(&self) -> Option<u8>;
+
+    fn set_extensions(&mut self, Vec<u8>);
+    fn get_extensions(&self) -> Option<&Vec<u8>>;
+    fn append_extensions(&mut self, &mut Vec<u8>);
+
+    fn set_elliptic_curves(&mut self, Vec<u8>);
+    fn get_elliptic_curves(&self) -> Option<&Vec<u8>>;
+
+    fn set_ec_point_fmt(&mut self, Vec<u8>);
+    fn get_ec_point_fmt(&self) -> Option<&Vec<u8>>;
+
+    fn set_alpn(&mut self, Vec<u8>);
+    fn get_alpn(&self) -> Option<&Vec<u8>>;
+}
+
+#[derive(Debug, PartialEq, Default)]
 pub struct ServerHelloFingerprint {
     pub record_tls_version: TlsVersion,
     pub sh_tls_version: TlsVersion,
@@ -429,10 +466,252 @@ pub struct ServerHelloFingerprint {
     pub alpn: Vec<u8>,
 }
 
+pub struct ServerReturn {
+    pub server_hello: Option<ServerHelloFingerprint>,
+    pub cert: Option<openssl::x509::X509>,
+}
 
-pub type ServerHelloParseResult = Result<ServerHelloFingerprint, HelloParseError>;
+impl ServerHelloAccessors for ServerHelloFingerprint { 
+    fn set_record_tls_version(&mut self, t: TlsVersion) {
+        self.record_tls_version = t;
+    }
 
-impl ServerHelloFingerprint {
+    fn get_record_tls_version(&self) -> Option<TlsVersion> {
+        Some(self.record_tls_version)
+    }
+
+    fn set_sh_tls_version(&mut self, t: TlsVersion) {
+        self.sh_tls_version = t;
+    }
+
+    fn get_sh_tls_version(&self) -> Option<TlsVersion> {
+        Some(self.sh_tls_version)
+    }
+
+    fn set_server_random(&mut self, v:Vec<u8>) {
+        self.server_random = v;
+    }
+
+    fn get_server_random(&self) -> Option<&Vec<u8>> {
+        Some(&self.server_random)
+    }
+
+    fn set_cipher_suite(&mut self, cs: u16) {
+        self.cipher_suite = cs;
+    }
+
+    fn get_cipher_suite(&self) -> Option<u16> {
+        Some(self.cipher_suite)
+    }
+
+    fn set_compression_method(&mut self, cm: u8) {
+        self.compression_method = cm;
+    }
+
+    fn get_compression_method(&self) -> Option<u8> {
+        Some(self.compression_method)
+    }
+
+    fn set_extensions(&mut self, ex: Vec<u8>) {
+        self.extensions = ex;
+    }
+
+    fn get_extensions(&self) -> Option<&Vec<u8>> {
+        Some(&self.extensions)
+    }
+
+    fn append_extensions(&mut self, v: &mut Vec<u8>) {
+        self.extensions.append(v);
+    }
+
+    fn set_elliptic_curves(&mut self, ec: Vec<u8>) {
+        self.elliptic_curves = ec;
+    }
+
+    fn get_elliptic_curves(&self) -> Option<&Vec<u8>> {
+        Some(&self.elliptic_curves)
+    }
+
+    fn set_ec_point_fmt(&mut self, ecpf: Vec<u8>) {
+        self.ec_point_fmt = ecpf;
+    }
+
+    fn get_ec_point_fmt(&self) -> Option<&Vec<u8>> {
+        Some(&self.ec_point_fmt)
+    }
+
+    fn set_alpn(&mut self, alpn: Vec<u8>) {
+        self.alpn = alpn;
+    }
+
+    fn get_alpn(&self) -> Option<&Vec<u8>> {
+        Some(&self.alpn)
+    }
+}
+
+impl ServerHelloAccessors for ServerReturn {
+    fn set_record_tls_version(&mut self, t: TlsVersion) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.record_tls_version = t;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_record_tls_version(&self) -> Option<TlsVersion> {
+        match self.server_hello {
+            Some(ref sh) => {Some(sh.record_tls_version)}
+            None => {None}
+        }
+    }
+
+    fn set_sh_tls_version(&mut self, t: TlsVersion) {
+        match self.server_hello {
+            Some(ref mut sh) => {sh.sh_tls_version = t;}
+            _ => {}
+        }
+    }
+
+    fn get_sh_tls_version(&self) -> Option<TlsVersion> {
+        match self.server_hello {
+            Some(ref sh) => {Some(sh.sh_tls_version)}
+            None => {None}
+        }
+    }
+
+    fn set_server_random(&mut self, v:Vec<u8>) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.server_random = v;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_server_random(&self) -> Option<&Vec<u8>> {
+        match self.server_hello {
+            Some(ref sh) => {Some(&sh.server_random)}
+            None => {None}
+        }
+    }
+
+    fn set_cipher_suite(&mut self, cs: u16) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.cipher_suite = cs;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_cipher_suite(&self) -> Option<u16> {
+        match self.server_hello {
+            Some(ref sh) => {Some(sh.cipher_suite)}
+            None => {None}
+        }
+    }
+
+    fn set_compression_method(&mut self, cm: u8) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.compression_method = cm;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_compression_method(&self) -> Option<u8> {
+        match self.server_hello {
+            Some(ref sh) => {Some(sh.compression_method)}
+            None => {None}
+        }
+    }
+
+    fn set_extensions(&mut self, ex: Vec<u8>) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.extensions = ex;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_extensions(&self) -> Option<&Vec<u8>> {
+        match self.server_hello {
+            Some(ref sh) => {Some(&sh.extensions)}
+            None => {None}
+        }
+    }
+
+    fn append_extensions(&mut self, v: &mut Vec<u8>) {
+        match self.server_hello{
+            Some(ref mut sh) => {
+                sh.extensions.append(v);
+            }
+            _ => {}
+        }
+    }
+
+    fn set_elliptic_curves(&mut self, ec: Vec<u8>) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.elliptic_curves = ec;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_elliptic_curves(&self) -> Option<&Vec<u8>> {
+        match self.server_hello {
+            Some(ref sh) => {Some(&sh.elliptic_curves)}
+            None => {None}
+        }
+    }
+
+    fn set_ec_point_fmt(&mut self, ecpf: Vec<u8>) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.ec_point_fmt = ecpf;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_ec_point_fmt(&self) -> Option<&Vec<u8>> {
+        match self.server_hello {
+            Some(ref sh) => {Some(&sh.ec_point_fmt)}
+            None => {None}
+        }
+    }
+
+    fn set_alpn(&mut self, alpn: Vec<u8>) {
+        match self.server_hello {
+            Some(ref mut sh) => {
+                sh.alpn = alpn;
+            }
+            _ => {}
+        }
+    }
+
+    fn get_alpn(&self) -> Option<&Vec<u8>> {
+        match self.server_hello {
+            Some(ref sh) => {Some(&sh.alpn)}
+            None => {None}
+        }
+    }
+}
+
+pub type ServerHelloParseResult = Result<ServerReturn, HelloParseError>;
+
+impl ServerReturn {
+    pub fn get_server_hello(&self) -> Option<&ServerHelloFingerprint> {
+        match self.server_hello {
+            Some(ref sh) => {Some(&sh)}
+            None => {None}
+        }
+    }
+
     pub fn from_try(a: &[u8]) -> ServerHelloParseResult {
         if a.len() < 44 {
             return Err(HelloParseError::ShortBuffer);
@@ -495,7 +774,7 @@ impl ServerHelloFingerprint {
             return Err(HelloParseError::ExtensionsLenExceedBuf);
         }
 
-        let mut sh = ServerHelloFingerprint {
+        let sh = ServerHelloFingerprint {
             record_tls_version: record_tls_version,
             sh_tls_version: sh_tls_version,
             server_random: server_random,
@@ -505,6 +784,11 @@ impl ServerHelloFingerprint {
             elliptic_curves: Vec::new(),
             ec_point_fmt: Vec::new(),
             alpn: Vec::new(),
+        };
+
+        let mut sr = ServerReturn {
+            server_hello: enum_primitive::Option::Some(sh),
+            cert: None,
         };
 
         let sh_end = offset + extensions_len;
@@ -517,14 +801,14 @@ impl ServerHelloFingerprint {
             if offset + ext_len > sh_end {
                 return Err(HelloParseError::ExtensionLenExceedBuf);
             }
-            sh.process_extension(&a[offset..offset + 2], &a[offset + 4..offset + 4 + ext_len]);
+            sr.process_extension(&a[offset..offset + 2], &a[offset + 4..offset + 4 + ext_len]);
 
             offset = match (offset + 4).checked_add(ext_len) {
                 Some(i) => i,
                 None => return Err(HelloParseError::ExtensionLenExceedBuf),
             };
         }
-        Ok(sh)
+        Ok(sr)
     }
 
     // NOT UNGREASED
@@ -533,41 +817,61 @@ impl ServerHelloFingerprint {
         match TlsExtension::from_u16(ext_id) {
             // we copy whole ext_data, including all the redundant lengths
             Some(TlsExtension::SupportedCurves) => {
-                self.elliptic_curves = ext_data.to_vec();
+                self.set_elliptic_curves( ext_data.to_vec());
             }
             Some(TlsExtension::SupportedPoints) => {
-                self.ec_point_fmt = ext_data.to_vec();
+                self.set_ec_point_fmt(ext_data.to_vec());
             }
             Some(TlsExtension::ALPN) => {
-                self.alpn = ext_data.to_vec();
+                self.set_alpn(ext_data.to_vec());
             }
             _ => {}
         };
 
-        self.extensions.append(&mut ungrease_u8(ext_id_u8));
+        self.append_extensions(&mut ungrease_u8(ext_id_u8));
     }
 
     pub fn get_fingerprint(&self) -> u64 {
         let mut hasher = Sha1::new();
 
-        let versions = (self.record_tls_version as u32) << 16 | (self.sh_tls_version as u32);
+        let versions = (self.get_record_tls_version().unwrap_or_else(|| TlsVersion::NONE) as u32) << 16 | (self.get_sh_tls_version().unwrap_or_else(|| TlsVersion::NONE) as u32);
         hash_u32(&mut hasher, versions);
 
-        let suite_and_compr = (self.cipher_suite as u32) << 16 | (self.compression_method as u32);
+        let suite_and_compr = (self.get_cipher_suite().unwrap_or_else(|| 0) as u32) << 16 | (self.get_compression_method().unwrap_or_else(|| 0) as u32);
         // 8 bytes are left empty, that's fine
         hash_u32(&mut hasher, suite_and_compr as u32);
 
-        hash_u32(&mut hasher, self.extensions.len() as u32);
-        hasher.input(&self.extensions);
+        match self.get_extensions() {
+            Some(ex) => {
+                hash_u32(&mut hasher, ex.len() as u32);
+                hasher.input(&ex);
+            }
+            None => {}
+        }
 
-        hash_u32(&mut hasher, self.elliptic_curves.len() as u32);
-        hasher.input(&self.elliptic_curves);
+        match self.get_elliptic_curves() {
+            Some(ec) => {
+                hash_u32(&mut hasher, ec.len() as u32);
+                hasher.input(&ec);
+            }
+            None => {}
+        }
 
-        hash_u32(&mut hasher, self.ec_point_fmt.len() as u32);
-        hasher.input(&self.ec_point_fmt);
+        match self.get_ec_point_fmt() {
+            Some(ecpf) => {
+                hash_u32(&mut hasher, ecpf.len() as u32);
+                hasher.input(&ecpf);
+            }
+            None => {}
+        }
 
-        hash_u32(&mut hasher, self.alpn.len() as u32);
-        hasher.input(&self.alpn);
+        match self.get_alpn() {
+            Some(alpn) => {
+                hash_u32(&mut hasher, alpn.len() as u32);
+                hasher.input(&alpn);
+            }
+            None => {}
+        }
 
         let mut result = [0; 20];
         hasher.result(&mut result);
@@ -587,6 +891,15 @@ impl fmt::Display for ServerHelloFingerprint {
                self.ec_point_fmt.as_slice().as_hex(),
                self.alpn.as_slice().as_hex(),
         )
+    }
+}
+
+impl fmt::Display for ServerReturn {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.get_server_hello() {
+            Some(ref sh) => {write!(f, "{}", sh)}
+            None => {write!(f, "No server Hello")}
+        }
     }
 }
 
