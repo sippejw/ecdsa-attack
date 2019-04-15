@@ -10,7 +10,7 @@ use self::crypto::digest::Digest;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HelloParseError {
+pub enum ParseError {
     ShortBuffer,
     NotAHandshake,
     UnknownRecordTLSVersion,
@@ -34,6 +34,9 @@ pub enum HelloParseError {
     PskKeyExchangeModesExtLenMisparse,
     SupportedVersionsExtShort,
     SupportedVersionsExtLenMisparse,
+
+    NotACertificate,
+    NotFullCertificate,
 }
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]

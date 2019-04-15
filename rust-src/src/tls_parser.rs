@@ -1,18 +1,22 @@
-extern crate num;
-extern crate hex_slice;
-extern crate crypto;
 extern crate byteorder;
+extern crate crypto;
+extern crate hex_slice;
+extern crate num;
+extern crate openssl;
 
-use std::str;
-use std::fmt;
-use self::num::FromPrimitive;
-use self::hex_slice::AsHex;
-use std::hash::{Hash, Hasher};
+use self::byteorder::{ByteOrder, BigEndian};
 use self::crypto::digest::Digest;
 use self::crypto::sha1::Sha1;
-use self::byteorder::{ByteOrder, BigEndian};
+use self::hex_slice::AsHex;
+use self::num::FromPrimitive;
+use self::openssl::x509::X509;
 
-use common::{u8_to_u16_be, u8_to_u32_be, vec_u8_to_vec_u16_be, hash_u32, HelloParseError};
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::str;
+
+use common::{u8_to_u16_be, u8_to_u32_be, vec_u8_to_vec_u16_be, hash_u32, ParseError};
+use flow_tracker::FlowTracker;
 
 enum_from_primitive! {
 #[repr(u8)]
@@ -22,7 +26,7 @@ pub enum TlsRecordType {
 	Alert            = 21,
 	Handshake        = 22,
 	ApplicationData  = 23,
-	Heartbeat         = 24,
+	Heartbeat        = 24,
 }
 }
 
@@ -120,41 +124,41 @@ pub struct ClientHelloFingerprint {
     pub record_size_limit : Vec<u8>,
 }
 
-pub type ClientHelloParseResult = Result<ClientHelloFingerprint, HelloParseError>;
+pub type ClientHelloParseResult = Result<ClientHelloFingerprint, ParseError>;
 
 impl ClientHelloFingerprint {
     pub fn from_try(a: &[u8]) -> ClientHelloParseResult {
         if a.len() < 42 {
-            return Err(HelloParseError::ShortBuffer);
+            return Err(ParseError::ShortBuffer);
         }
 
         let record_type = a[0];
         if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
-            return Err(HelloParseError::NotAHandshake);
+            return Err(ParseError::NotAHandshake);
         }
 
         let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
             Some(tls_version) => tls_version,
-            None => return Err(HelloParseError::UnknownRecordTLSVersion),
+            None => return Err(ParseError::UnknownRecordTLSVersion),
         };
 
         let record_length = u8_to_u16_be(a[3], a[4]);
         if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-            return Err(HelloParseError::ShortOuterRecord);
+            return Err(ParseError::ShortOuterRecord);
         }
 
         if TlsHandshakeType::from_u8(a[5]) != Some(TlsHandshakeType::ClientHello) {
-            return Err(HelloParseError::NotAClientHello);
+            return Err(ParseError::NotAClientHello);
         }
 
         let ch_length = u8_to_u32_be(0, a[6], a[7], a[8]);
         if ch_length != record_length as u32 - 4 {
-            return Err(HelloParseError::InnerOuterRecordLenContradict);
+            return Err(ParseError::InnerOuterRecordLenContradict);
         }
 
         let ch_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[9], a[10])) {
             Some(tls_version) => tls_version,
-            None => return Err(HelloParseError::UnknownChTLSVersion),
+            None => return Err(ParseError::UnknownChTLSVersion),
         };
 
         // 32 bytes of client random
@@ -166,13 +170,13 @@ impl ClientHelloFingerprint {
         let session_id_len = a[offset] as usize;
         offset += session_id_len + 1;
         if offset + 2 > a.len() {
-            return Err(HelloParseError::SessionIDLenExceedBuf);
+            return Err(ParseError::SessionIDLenExceedBuf);
         }
 
         let cipher_suites_len = u8_to_u16_be(a[offset], a[offset + 1]) as usize;
         offset += 2;
         if offset + cipher_suites_len + 1 > a.len() || cipher_suites_len % 2 == 1 {
-            return Err(HelloParseError::CiphersuiteLenMisparse);
+            return Err(ParseError::CiphersuiteLenMisparse);
         }
 
         let cipher_suites = ungrease_u8(&a[offset..offset + cipher_suites_len]);
@@ -181,7 +185,7 @@ impl ClientHelloFingerprint {
         let compression_len = a[offset] as usize;
         offset += 1;
         if offset + compression_len + 2 > a.len() {
-            return Err(HelloParseError::CompressionLenExceedBuf);
+            return Err(ParseError::CompressionLenExceedBuf);
         }
 
         let compression_methods = a[offset..offset + compression_len].to_vec();
@@ -190,7 +194,7 @@ impl ClientHelloFingerprint {
         let extensions_len = u8_to_u16_be(a[offset], a[offset + 1]) as usize;
         offset += 2;
         if offset + extensions_len > a.len() {
-            return Err(HelloParseError::ExtensionsLenExceedBuf);
+            return Err(ParseError::ExtensionsLenExceedBuf);
         }
 
         let mut ch = ClientHelloFingerprint {
@@ -216,22 +220,22 @@ impl ClientHelloFingerprint {
         let ch_end = offset + extensions_len;
         while offset < ch_end {
             if offset > ch_end - 4 {
-                return Err(HelloParseError::ShortExtensionHeader);
+                return Err(ParseError::ShortExtensionHeader);
             }
             let ext_len = u8_to_u16_be(a[offset + 2], a[offset + 3]) as usize;
             if offset + ext_len > ch_end {
-                return Err(HelloParseError::ExtensionLenExceedBuf);
+                return Err(ParseError::ExtensionLenExceedBuf);
             }
             ch.process_extension(&a[offset..offset + 2], &a[offset + 4..offset + 4 + ext_len])?;
             offset = match (offset + 4).checked_add(ext_len) {
                 Some(i) => i,
-                None => return Err(HelloParseError::ExtensionLenExceedBuf),
+                None => return Err(ParseError::ExtensionLenExceedBuf),
             };
         }
         Ok(ch)
     }
 
-    fn process_extension(&mut self, ext_id_u8: &[u8], ext_data: &[u8]) -> Result<(), HelloParseError> {
+    fn process_extension(&mut self, ext_id_u8: &[u8], ext_data: &[u8]) -> Result<(), ParseError> {
         let ext_id = u8_to_u16_be(ext_id_u8[0], ext_id_u8[1]);
         match TlsExtension::from_u16(ext_id) {
             // we copy whole ext_data, including all the redundant lengths
@@ -265,36 +269,36 @@ impl ClientHelloFingerprint {
                 // we want [[group, size], [group, size], ...]
                 let key_share_data = ext_data.to_vec();
                 if key_share_data.len() < 2 {
-                    return Err(HelloParseError::KeyShareExtShort);
+                    return Err(ParseError::KeyShareExtShort);
                 }
                 let key_share_inner_len = u8_to_u16_be(key_share_data[0], key_share_data[1]) as usize;
                 let key_share_inner_data = match key_share_data.get(2 .. key_share_data.len()) {
                     Some(data) => data,
-                    None => return Err(HelloParseError::KeyShareExtShort),
+                    None => return Err(ParseError::KeyShareExtShort),
                 };
                 if key_share_inner_len != key_share_inner_data.len() {
-                    return Err(HelloParseError::KeyShareExtLenMisparse);
+                    return Err(ParseError::KeyShareExtLenMisparse);
                 }
                 self.key_share = parse_key_share(key_share_inner_data)?;
             }
             Some(TlsExtension::PskKeyExchangeModes) => {
                 if ext_data.len() < 1 {
-                    return Err(HelloParseError::PskKeyExchangeModesExtShort);
+                    return Err(ParseError::PskKeyExchangeModesExtShort);
                 }
                 let psk_modes_inner_len = ext_data[0] as usize;
                 if psk_modes_inner_len != ext_data.len() - 1 {
-                    return Err(HelloParseError::PskKeyExchangeModesExtLenMisparse);
+                    return Err(ParseError::PskKeyExchangeModesExtLenMisparse);
                 }
 
                 self.psk_key_exchange_modes = ungrease_u8(&ext_data[1 .. ]);
             }
             Some(TlsExtension::SupportedVersions) => {
                 if ext_data.len() < 1 {
-                    return Err(HelloParseError::SupportedVersionsExtLenMisparse);
+                    return Err(ParseError::SupportedVersionsExtLenMisparse);
                 }
                 let versions_inner_len = ext_data[0] as usize;
                 if versions_inner_len != ext_data.len() - 1 {
-                    return Err(HelloParseError::PskKeyExchangeModesExtLenMisparse);
+                    return Err(ParseError::PskKeyExchangeModesExtLenMisparse);
                 }
 
                 self.supported_versions = ungrease_u8(&ext_data[1 .. ]);
@@ -398,15 +402,15 @@ fn ungrease_u8(arr: &[u8]) -> Vec<u8> {
 
 // parses groups and lengths of key_share (but not keys themselves) and ungreases the groups
 // passed vector must already be stripped from overall size
-fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, HelloParseError> {
+fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, ParseError> {
     if arr.len() > std::u16::MAX as usize {
-        return Err(HelloParseError::KeyShareExtLong);
+        return Err(ParseError::KeyShareExtLong);
     }
     let mut i: usize = 0;
     let mut res = Vec::new();
     while i < arr.len() {
         if i  > arr.len() - 4 {
-            return Err(HelloParseError::KeyShareExtShort);
+            return Err(ParseError::KeyShareExtShort);
         }
         let mut group_size = ungrease_u8(&arr[i .. i+2]);
         let size = u8_to_u16_be(arr[i+2], arr[i+3]) as usize;
@@ -416,7 +420,7 @@ fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, HelloParseError> {
 
         i = match i.checked_add(4 + size) {
             Some(i) => i,
-            None => return Err(HelloParseError::KeyShareExtShort),
+            None => return Err(ParseError::KeyShareExtShort),
         };
     }
     Ok(res)
@@ -466,9 +470,84 @@ pub struct ServerHelloFingerprint {
     pub alpn: Vec<u8>,
 }
 
+impl ServerHelloFingerprint {
+    // NOT UNGREASED
+    fn process_extension(&mut self, ext_id_u8: &[u8], ext_data: &[u8]) {
+        let ext_id = u8_to_u16_be(ext_id_u8[0], ext_id_u8[1]);
+        match TlsExtension::from_u16(ext_id) {
+            // we copy whole ext_data, including all the redundant lengths
+            Some(TlsExtension::SupportedCurves) => {
+                self.set_elliptic_curves( ext_data.to_vec());
+            }
+            Some(TlsExtension::SupportedPoints) => {
+                self.set_ec_point_fmt(ext_data.to_vec());
+            }
+            Some(TlsExtension::ALPN) => {
+                self.set_alpn(ext_data.to_vec());
+            }
+            _ => {}
+        };
+
+        self.append_extensions(&mut ungrease_u8(ext_id_u8));
+    }
+
+    pub fn get_fingerprint(&self) -> u64 {
+        let mut hasher = Sha1::new();
+
+        let versions = (self.get_record_tls_version().unwrap_or_else(|| TlsVersion::NONE) as u32) << 16 | (self.get_sh_tls_version().unwrap_or_else(|| TlsVersion::NONE) as u32);
+        hash_u32(&mut hasher, versions);
+
+        let suite_and_compr = (self.get_cipher_suite().unwrap_or_else(|| 0) as u32) << 16 | (self.get_compression_method().unwrap_or_else(|| 0) as u32);
+        // 8 bytes are left empty, that's fine
+        hash_u32(&mut hasher, suite_and_compr as u32);
+
+        match self.get_extensions() {
+            Some(ex) => {
+                hash_u32(&mut hasher, ex.len() as u32);
+                hasher.input(&ex);
+            }
+            None => {}
+        }
+
+        match self.get_elliptic_curves() {
+            Some(ec) => {
+                hash_u32(&mut hasher, ec.len() as u32);
+                hasher.input(&ec);
+            }
+            None => {}
+        }
+
+        match self.get_ec_point_fmt() {
+            Some(ecpf) => {
+                hash_u32(&mut hasher, ecpf.len() as u32);
+                hasher.input(&ecpf);
+            }
+            None => {}
+        }
+
+        match self.get_alpn() {
+            Some(alpn) => {
+                hash_u32(&mut hasher, alpn.len() as u32);
+                hasher.input(&alpn);
+            }
+            None => {}
+        }
+
+        let mut result = [0; 20];
+        hasher.result(&mut result);
+        BigEndian::read_u64(&result[0..8])
+    }
+}
+
+pub struct ServerKeyExchange {
+    pub server_params: Vec<u8>,
+    pub signature: Option<Vec<u8>>,
+}
+
 pub struct ServerReturn {
     pub server_hello: Option<ServerHelloFingerprint>,
     pub cert: Option<openssl::x509::X509>,
+    pub server_key_exchange: Option<ServerKeyExchange>,
 }
 
 impl ServerHelloAccessors for ServerHelloFingerprint { 
@@ -702,7 +781,9 @@ impl ServerHelloAccessors for ServerReturn {
     }
 }
 
-pub type ServerHelloParseResult = Result<ServerReturn, HelloParseError>;
+pub type ServerParseResult = Result<ServerReturn, ParseError>;
+pub type ServerHelloParseResult = Result<ServerHelloFingerprint, ParseError>;
+pub type ServerCertificateParseResult = Result<X509, ParseError>;
 
 impl ServerReturn {
     pub fn get_server_hello(&self) -> Option<&ServerHelloFingerprint> {
@@ -712,54 +793,66 @@ impl ServerReturn {
         }
     }
 
-    pub fn from_try(a: &[u8]) -> ServerHelloParseResult {
-        if a.len() < 44 {
-            return Err(HelloParseError::ShortBuffer);
+    pub fn get_certificate(&self) -> Option<&openssl::x509::X509> {
+        match self.cert {
+            Some(ref cert) => {Some(&cert)}
+            None => {None}
         }
+    }
 
-        let record_type = a[0];
+    pub fn get_server_key_exchange(&self) -> Option<&ServerKeyExchange> {
+        match self.server_key_exchange {
+            Some(ref ske) => {Some(&ske)}
+            None => {None}
+        }
+    }
+
+    pub fn find_server_hello(a: &[u8], ft: &mut FlowTracker) -> ServerHelloParseResult {
+        let of = ft.overflow;
+        let record_type = a[of];
         if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
-            return Err(HelloParseError::NotAHandshake);
+            return Err(ParseError::NotAHandshake);
         }
 
-        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
+        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
             Some(tls_version) => tls_version,
-            None => return Err(HelloParseError::UnknownRecordTLSVersion),
+            None => return Err(ParseError::UnknownRecordTLSVersion),
         };
 
-        let record_length = u8_to_u16_be(a[3], a[4]);
+        let record_length = u8_to_u16_be(a[of+3], a[of+4]);
         if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-            return Err(HelloParseError::ShortOuterRecord);
+            return Err(ParseError::ShortOuterRecord);
         }
 
-        if TlsHandshakeType::from_u8(a[5]) != Some(TlsHandshakeType::ServerHello) {
-            return Err(HelloParseError::NotAServerHello);
+        // TODO: make this more general, not just parsing hellos anymore
+        if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::ServerHello) {
+           return Err(ParseError::NotAServerHello);
         }
 
-        let ch_length = u8_to_u32_be(0, a[6], a[7], a[8]);
+        let ch_length = u8_to_u32_be(0, a[of+6], a[of+7], a[of+8]);
         if ch_length != record_length as u32 - 4 {
-            return Err(HelloParseError::InnerOuterRecordLenContradict);
+            return Err(ParseError::InnerOuterRecordLenContradict);
         }
 
-        let sh_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[9], a[10])) {
+        let sh_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+9], a[of+10])) {
             Some(tls_version) => tls_version,
-            None => return Err(HelloParseError::UnknownChTLSVersion),
+            None => return Err(ParseError::UnknownChTLSVersion),
         };
 
         // 32 bytes of client random
 
-        let mut offset: usize = 11;
+        let mut offset: usize = of+11;
         let server_random = ungrease_u8(&a[offset..offset+32]);
         offset += 32;
 
         let session_id_len = a[offset] as usize;
         offset += session_id_len + 1;
         if offset + 2 > a.len() {
-            return Err(HelloParseError::SessionIDLenExceedBuf);
+            return Err(ParseError::SessionIDLenExceedBuf);
         }
 
         if offset + 5 > a.len() {
-            return Err(HelloParseError::ShortBuffer);
+            return Err(ParseError::ShortBuffer);
         }
 
         let cipher_suite = u8_to_u16_be(a[offset], a[offset + 1]);
@@ -768,13 +861,8 @@ impl ServerReturn {
         let compression_method = a[offset];
         offset += 1;
 
-        let extensions_len = u8_to_u16_be(a[offset], a[offset + 1]) as usize;
-        offset += 2;
-        if offset + extensions_len > a.len() {
-            return Err(HelloParseError::ExtensionsLenExceedBuf);
-        }
 
-        let sh = ServerHelloFingerprint {
+        let mut sh = ServerHelloFingerprint {
             record_tls_version: record_tls_version,
             sh_tls_version: sh_tls_version,
             server_random: server_random,
@@ -786,97 +874,113 @@ impl ServerReturn {
             alpn: Vec::new(),
         };
 
-        let mut sr = ServerReturn {
-            server_hello: enum_primitive::Option::Some(sh),
-            cert: None,
-        };
+        let extensions_len = u8_to_u16_be(a[offset], a[offset + 1]) as usize;
+        offset += 2;
+        if offset + extensions_len > a.len() {
+            return Err(ParseError::ExtensionsLenExceedBuf);
+        }
 
         let sh_end = offset + extensions_len;
         while offset < sh_end {
             if offset > sh_end - 4 {
-                return Err(HelloParseError::ShortExtensionHeader);
+                return Err(ParseError::ShortExtensionHeader);
             }
 
             let ext_len = u8_to_u16_be(a[offset + 2], a[offset + 3]) as usize;
             if offset + ext_len > sh_end {
-                return Err(HelloParseError::ExtensionLenExceedBuf);
+                return Err(ParseError::ExtensionLenExceedBuf);
             }
-            sr.process_extension(&a[offset..offset + 2], &a[offset + 4..offset + 4 + ext_len]);
+            sh.process_extension(&a[offset..offset + 2], &a[offset + 4..offset + 4 + ext_len]);
 
             offset = match (offset + 4).checked_add(ext_len) {
                 Some(i) => i,
-                None => return Err(HelloParseError::ExtensionLenExceedBuf),
+                None => return Err(ParseError::ExtensionLenExceedBuf),
             };
         }
+
+        ft.overflow = of+offset;
+
+        Ok(sh)
+    }
+
+    pub fn find_certificate(a: &[u8], ft: &mut FlowTracker) -> ServerCertificateParseResult {
+        let of = ft.overflow;
+        if a.len() < of {
+            return Err(ParseError::ShortBuffer);
+        }
+
+        let record_type = a[of];
+        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+            return Err(ParseError::NotAHandshake);
+        }
+
+        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
+            Some(tls_version) => tls_version,
+            None => return Err(ParseError::UnknownRecordTLSVersion),
+        };
+
+        let record_length = u8_to_u16_be(a[of+3], a[of+4]);
+        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
+            // have an overflow of certs between packets
+            ft.overflow = record_length as usize - a[of..a.len()].len();
+        }
+
+        if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::Certificate) {
+            return Err(ParseError::NotACertificate);
+        }
+
+        let ch_length = u8_to_u32_be(0, a[of+6], a[of+7], a[of+8]);
+        if ch_length != record_length as u32 - 4 {
+            return Err(ParseError::InnerOuterRecordLenContradict);
+        }
+        let cert_len = u8_to_u32_be(0, a[of+12], a[of+13], a[of+14]) as usize;
+
+        if a[of+15..].len() < cert_len {
+            return Err(ParseError::NotFullCertificate);
+        }
+
+        // we have a full certificate here
+
+        match X509::from_der(&a[of+15..of+15+cert_len]) {
+            Ok(cert) => {
+                return Ok(cert);
+            }
+            Err(_) => {
+                return Err(ParseError::NotACertificate);
+            }
+        }
+    }
+
+    pub fn from_try(a: &[u8], ft: &mut FlowTracker) -> ServerParseResult {
+        // not as important for general check.
+
+        let mut sr = ServerReturn {
+            server_hello: None,
+            cert: None,
+            server_key_exchange: None,
+        };
+
+        // first check for a ServerHello:
+        match ServerReturn::find_server_hello(a, ft) {
+            Ok(sh) => {
+                sr.server_hello = enum_primitive::Option::Some(sh);
+            }
+            Err(_) => {} // didn't find server hello
+        }
+        
+        // now check for other records!
+
+        match ServerReturn::find_certificate(a, ft) {
+            Ok(cert) => {
+                sr.cert = enum_primitive::Option::Some(cert);
+            }
+            Err(_) => {} // didn't find a certificate
+        }
+
         Ok(sr)
     }
 
-    // NOT UNGREASED
-    fn process_extension(&mut self, ext_id_u8: &[u8], ext_data: &[u8]) {
-        let ext_id = u8_to_u16_be(ext_id_u8[0], ext_id_u8[1]);
-        match TlsExtension::from_u16(ext_id) {
-            // we copy whole ext_data, including all the redundant lengths
-            Some(TlsExtension::SupportedCurves) => {
-                self.set_elliptic_curves( ext_data.to_vec());
-            }
-            Some(TlsExtension::SupportedPoints) => {
-                self.set_ec_point_fmt(ext_data.to_vec());
-            }
-            Some(TlsExtension::ALPN) => {
-                self.set_alpn(ext_data.to_vec());
-            }
-            _ => {}
-        };
 
-        self.append_extensions(&mut ungrease_u8(ext_id_u8));
-    }
-
-    pub fn get_fingerprint(&self) -> u64 {
-        let mut hasher = Sha1::new();
-
-        let versions = (self.get_record_tls_version().unwrap_or_else(|| TlsVersion::NONE) as u32) << 16 | (self.get_sh_tls_version().unwrap_or_else(|| TlsVersion::NONE) as u32);
-        hash_u32(&mut hasher, versions);
-
-        let suite_and_compr = (self.get_cipher_suite().unwrap_or_else(|| 0) as u32) << 16 | (self.get_compression_method().unwrap_or_else(|| 0) as u32);
-        // 8 bytes are left empty, that's fine
-        hash_u32(&mut hasher, suite_and_compr as u32);
-
-        match self.get_extensions() {
-            Some(ex) => {
-                hash_u32(&mut hasher, ex.len() as u32);
-                hasher.input(&ex);
-            }
-            None => {}
-        }
-
-        match self.get_elliptic_curves() {
-            Some(ec) => {
-                hash_u32(&mut hasher, ec.len() as u32);
-                hasher.input(&ec);
-            }
-            None => {}
-        }
-
-        match self.get_ec_point_fmt() {
-            Some(ecpf) => {
-                hash_u32(&mut hasher, ecpf.len() as u32);
-                hasher.input(&ecpf);
-            }
-            None => {}
-        }
-
-        match self.get_alpn() {
-            Some(alpn) => {
-                hash_u32(&mut hasher, alpn.len() as u32);
-                hasher.input(&alpn);
-            }
-            None => {}
-        }
-
-        let mut result = [0; 20];
-        hasher.result(&mut result);
-        BigEndian::read_u64(&result[0..8])
-    }
 }
 
 impl fmt::Display for ServerHelloFingerprint {

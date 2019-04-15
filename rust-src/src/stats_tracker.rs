@@ -2,7 +2,7 @@ extern crate time;
 
 use std::time::{Duration, Instant};
 use std::ops::Sub;
-use common::{HelloParseError};
+use common::{ParseError};
 
 pub struct StatsTracker {
     pub last_print: time::Tm,
@@ -91,37 +91,40 @@ impl StatsTracker {
         self.last_print = curr_time;
     }
 
-    pub fn store_clienthello_error(&mut self, err: HelloParseError) {
+    pub fn store_clienthello_error(&mut self, err: ParseError) {
         match err {
-            HelloParseError::ShortBuffer |
-            HelloParseError::NotAHandshake |
-            HelloParseError::UnknownRecordTLSVersion |
-            HelloParseError::ShortOuterRecord |
-            HelloParseError::NotAClientHello => {
+            ParseError::ShortBuffer |
+            ParseError::NotAHandshake |
+            ParseError::UnknownRecordTLSVersion |
+            ParseError::ShortOuterRecord |
+            ParseError::NotAClientHello => {
                 self.not_a_clienthello += 1;
             }
-            HelloParseError::InnerOuterRecordLenContradict |
-            HelloParseError::UnknownChTLSVersion |
-            HelloParseError::SessionIDLenExceedBuf |
-            HelloParseError::CiphersuiteLenMisparse |
-            HelloParseError::CompressionLenExceedBuf |
-            HelloParseError::ExtensionsLenExceedBuf |
-            HelloParseError::ShortExtensionHeader |
-            HelloParseError::ExtensionLenExceedBuf => {
+            ParseError::InnerOuterRecordLenContradict |
+            ParseError::UnknownChTLSVersion |
+            ParseError::SessionIDLenExceedBuf |
+            ParseError::CiphersuiteLenMisparse |
+            ParseError::CompressionLenExceedBuf |
+            ParseError::ExtensionsLenExceedBuf |
+            ParseError::ShortExtensionHeader |
+            ParseError::ExtensionLenExceedBuf => {
                 self.client_hello_misparsed += 1;
             }
-            HelloParseError::KeyShareExtShort |
-            HelloParseError::KeyShareExtLong |
-            HelloParseError::KeyShareExtLenMisparse |
-            HelloParseError::PskKeyExchangeModesExtShort |
-            HelloParseError::PskKeyExchangeModesExtLenMisparse |
-            HelloParseError::SupportedVersionsExtShort |
-            HelloParseError::SupportedVersionsExtLenMisparse => {
+            ParseError::KeyShareExtShort |
+            ParseError::KeyShareExtLong |
+            ParseError::KeyShareExtLenMisparse |
+            ParseError::PskKeyExchangeModesExtShort |
+            ParseError::PskKeyExchangeModesExtLenMisparse |
+            ParseError::SupportedVersionsExtShort |
+            ParseError::SupportedVersionsExtLenMisparse => {
                 println!("{:?}", err);
                 self.extension_misparsed += 1;
             }
-            HelloParseError::NotAServerHello => {
+            ParseError::NotAServerHello => {
                 panic!("Got NotAServerHello error from parsing ClientHello")
+            }
+            ParseError::NotACertificate | ParseError::NotFullCertificate => {
+                panic!("Got NotACertificate error from parsing ClientHello")
             }
         }
     }

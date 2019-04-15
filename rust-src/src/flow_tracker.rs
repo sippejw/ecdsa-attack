@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tls_parser::{ClientHelloFingerprint, ServerHelloFingerprint, ServerReturn};
 use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use stats_tracker::{StatsTracker};
-use common::{u8_to_u16_be, u8array_to_u32_be, u8_to_u32_be, TimedFlow, Flow, HelloParseError};
+use common::{u8_to_u16_be, u8array_to_u32_be, u8_to_u32_be, TimedFlow, Flow, ParseError};
 
 use postgres::{Connection, TlsMode};
 
@@ -41,6 +41,7 @@ pub struct FlowTracker {
     // Keys present in this map are flows we parse ServerHello from
     tracked_server_flows: HashMap<Flow, i64>,
     stale_server_drops: VecDeque<TimedFlow>,
+    pub overflow: usize,
 }
 
 impl FlowTracker {
@@ -56,6 +57,7 @@ impl FlowTracker {
             cache: MeasurementCache::new(),
             stats: StatsTracker::new(),
             dsn: None,
+            overflow: 0 as usize,
         }
     }
 
@@ -74,6 +76,7 @@ impl FlowTracker {
             cache: MeasurementCache::new(),
             stats: StatsTracker::new(),
             dsn: Some(dsn),
+            overflow: 0 as usize,
         };
         // flush to db at different time on different cores
         ft.cache.last_flush = ft.cache.last_flush.sub(time::Duration::seconds(
@@ -204,25 +207,38 @@ impl FlowTracker {
         // check for ServerHello
         if !is_client && self.tracked_server_flows.contains_key(&flow) {
             self.stats.sfingerprint_checks += 1;
-            match ServerReturn::from_try(tcp_pkt.payload()) {
+            match ServerReturn::from_try(tcp_pkt.payload(), self) {
                 Ok(fp) => {
-                    self.stats.sfingerprints_seen += 1;
-                    let sid = fp.get_fingerprint() as i64;
-                    let cid = self.tracked_server_flows[&flow];
+                    match fp.get_server_hello() {
+                        Some(ref sh) => {
+                            self.stats.sfingerprints_seen += 1;
+                            let sid = sh.get_fingerprint() as i64;
+                            let cid = self.tracked_server_flows[&flow];
 
-                    if self.write_to_stdout {
-                        println!("ServerHello: {{ sid: {} cid: {} fp: {}}}",
-                                 sid, cid, fp);
+                            if self.write_to_stdout {
+                                println!("ServerHello: {{ sid: {} cid: {} sh: {}}}",
+                                        sid, cid, sh);
+                            }
+
+                            // need to re-write this to handle that fp is now a general return
+                            if self.write_to_db {
+                                // self.cache.add_sfingerprint(sid, fp);
+                                // self.cache.add_smeasurement(cid, sid);
+                                // self.cache.update_connection_with_sid(&flow.reversed_clone(), sid);
+                            }
+                        }
+                        None => {}
                     }
 
-                    // need to re-write this to handle that fp is now a general return
-                    if self.write_to_db {
-                        // self.cache.add_sfingerprint(sid, fp);
-                        // self.cache.add_smeasurement(cid, sid);
-                        // self.cache.update_connection_with_sid(&flow.reversed_clone(), sid);
+                    match fp.get_certificate() {
+                        Some(ref cert) => {
+                            println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
+                        }
+                        None => {println!("got no cert");}
+
                     }
                 }
-                Err(err) => {}
+                Err(err) => {println!("err: {:?}", err)}
             }
             self.tracked_server_flows.remove(&flow);
         }
