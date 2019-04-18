@@ -1,28 +1,25 @@
 extern crate time;
 
-use std::net::IpAddr;
-
-use std::collections::{HashSet, HashMap, VecDeque};
-use pnet::packet::ip::{IpNextHeaderProtocols};
-use pnet::packet::ethernet::{EthernetPacket};
-use pnet::packet::ipv4::Ipv4Packet;
-use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum};
-use pnet::packet::ipv6::Ipv6Packet;
-use pnet::packet::{Packet, PacketSize};
-
-use std::mem;
-use std::ops::Sub;
-
-use std::time::{Duration, Instant};
-use tls_parser::{ClientHelloFingerprint, ServerHelloFingerprint, ServerReturn};
-use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
-use stats_tracker::{StatsTracker};
-use common::{u8_to_u16_be, u8array_to_u32_be, u8_to_u32_be, TimedFlow, Flow, ParseError};
-
 use postgres::{Connection, TlsMode};
 
-use std::thread;
+use pnet::packet::ethernet::EthernetPacket;
+use pnet::packet::ip::IpNextHeaderProtocols;
+use pnet::packet::ipv4::Ipv4Packet;
+use pnet::packet::ipv6::Ipv6Packet;
+use pnet::packet::Packet;
+use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum};
 
+use std::collections::{HashSet, HashMap, VecDeque};
+use std::net::IpAddr;
+use std::ops::Sub;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
+use common::{TimedFlow, Flow};
+use stats_tracker::StatsTracker;
+use tls_parser;
+use tls_structs::{CipherSuite, ClientHelloFingerprint};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -41,7 +38,6 @@ pub struct FlowTracker {
     // Keys present in this map are flows we parse ServerHello from
     tracked_server_flows: HashMap<Flow, i64>,
     stale_server_drops: VecDeque<TimedFlow>,
-    pub overflow: usize,
 }
 
 impl FlowTracker {
@@ -57,7 +53,6 @@ impl FlowTracker {
             cache: MeasurementCache::new(),
             stats: StatsTracker::new(),
             dsn: None,
-            overflow: 0 as usize,
         }
     }
 
@@ -76,7 +71,6 @@ impl FlowTracker {
             cache: MeasurementCache::new(),
             stats: StatsTracker::new(),
             dsn: Some(dsn),
-            overflow: 0 as usize,
         };
         // flush to db at different time on different cores
         ft.cache.last_flush = ft.cache.last_flush.sub(time::Duration::seconds(
@@ -94,7 +88,7 @@ impl FlowTracker {
                     // taking not the whole payload is a work around PF_RING giving padding as data
                     if let Some(tcp_pkt) = TcpPacket::new(&ipv4_pkt.payload()[0..((ipv4_pkt.get_total_length() as usize)-4*(ipv4_pkt.get_header_length() as usize))]) {
                         if ipv4_checksum(&tcp_pkt, &ipv4_pkt.get_source(), &ipv4_pkt.get_destination()) ==
-                            tcp_pkt.get_checksum() {
+                            tcp_pkt.get_checksum() || true {
                             self.handle_tcp_packet(
                                 IpAddr::V4(ipv4_pkt.get_source()),
                                 IpAddr::V4(ipv4_pkt.get_destination()),
@@ -144,7 +138,7 @@ impl FlowTracker {
         } else {
             return
         }
-        let flow = Flow::new(&source, &destination, &tcp_pkt);
+        let mut flow = Flow::new(&source, &destination, &tcp_pkt, 0, CipherSuite::TlsNullWithNullNull);
         let tcp_flags = tcp_pkt.get_flags();
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.begin_tracking_flow(&flow, tcp_pkt.packet().to_vec());
@@ -206,14 +200,25 @@ impl FlowTracker {
 
         // check for ServerHello
         if !is_client && self.tracked_server_flows.contains_key(&flow) {
+            // reassign flow to get the one with the correct overflow & cipher_suite
+            for (&key, _) in self.tracked_server_flows.iter() {
+                if key == flow {
+                    flow = key;
+                    break;
+                }
+            }
             self.stats.sfingerprint_checks += 1;
-            match ServerReturn::from_try(tcp_pkt.payload(), self) {
+            match tls_parser::from_try(tcp_pkt.payload(), &mut flow) {
                 Ok(fp) => {
                     match fp.get_server_hello() {
                         Some(ref sh) => {
+                            // replace flow with new overflow one
+                            let cid = self.tracked_server_flows.remove(&flow).unwrap();
+                            self.tracked_server_flows.insert(flow, cid);
+
                             self.stats.sfingerprints_seen += 1;
                             let sid = sh.get_fingerprint() as i64;
-                            let cid = self.tracked_server_flows[&flow];
+                            // let cid = self.tracked_server_flows[&flow];
 
                             if self.write_to_stdout {
                                 println!("ServerHello: {{ sid: {} cid: {} sh: {}}}",
@@ -233,14 +238,25 @@ impl FlowTracker {
                     match fp.get_certificate() {
                         Some(ref cert) => {
                             println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
+                            // replace flow with new overflow one
+                            let cid = self.tracked_server_flows.remove(&flow).unwrap();
+                            self.tracked_server_flows.insert(flow, cid);
                         }
                         None => {println!("got no cert");}
 
                     }
+
+                    match fp.get_server_key_exchange() {
+                        Some(_) => {
+                            println!("somehow found server key exchange");
+                            self.tracked_server_flows.remove(&flow);
+                        }
+
+                        None => {println!("no server key exchange");}
+                    }
                 }
                 Err(err) => {println!("err: {:?}", err)}
             }
-            self.tracked_server_flows.remove(&flow);
         }
     }
 
@@ -409,7 +425,7 @@ ON CONFLICT ON CONSTRAINT ticket_sizes_pkey DO UPDATE
         });
     }
 
-    fn begin_tracking_flow(&mut self, flow: &Flow, syn_data: Vec<u8>) {
+    fn begin_tracking_flow(&mut self, flow: &Flow, _syn_data: Vec<u8>) {
         // Always push back, even if the entry was already there. Doesn't hurt
         // to do a second check on overdueness, and this is simplest.
         self.stale_drops.push_back(TimedFlow {

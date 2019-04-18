@@ -1,23 +1,23 @@
-mod flow_tracker;
-mod tls_parser;
 mod cache;
 mod common;
+mod flow_tracker;
 mod stats_tracker;
+mod tls_parser;
+mod tls_structs;
 
 #[macro_use]
 extern crate enum_primitive;
-extern crate time;
-extern crate pnet;
-extern crate postgres;
-
 extern crate libc;
+extern crate postgres;
+extern crate pnet;
+extern crate time;
+
 
 
 use libc::size_t;
 
 use libc::c_char;
 use std::ffi::CStr;
-use std::str;
 
 use std::os::raw::c_void;
 use std::mem::transmute;
@@ -34,7 +34,7 @@ pub extern "C" fn rust_process_packet(globals_ptr: *mut RustGlobalsStruct,
 {
 
     let globals = unsafe { &mut *globals_ptr };
-    let mut ft = unsafe { &mut *globals.ft };
+    let ft = unsafe { &mut *globals.ft };
 
     let rust_view = unsafe {
         slice::from_raw_parts_mut(raw_ethframe as *mut u8, frame_len as usize)
@@ -58,7 +58,7 @@ pub extern "C" fn rust_periodic_cleanup(globals_ptr: *mut RustGlobalsStruct)
 {
 
     let globals = unsafe { &mut *globals_ptr };
-    let mut ft = unsafe { &mut *globals.ft };
+    let ft = unsafe { &mut *globals.ft };
 
     ft.cleanup();
 }
@@ -68,7 +68,7 @@ pub extern "C" fn rust_print_avg_stats(globals_ptr: *mut RustGlobalsStruct)
 {
 
     let globals = unsafe { &mut *globals_ptr };
-    let mut ft = unsafe { &mut *globals.ft };
+    let ft = unsafe { &mut *globals.ft };
 
     ft.stats.print_avg_stats();
 }
@@ -92,6 +92,6 @@ pub extern "C" fn rust_init(core_id: i8, cores_total: i32, dsn_ptr: *const c_cha
 #[no_mangle]
 pub extern "C" fn rust_cleanup(globals_ptr: *mut RustGlobalsStruct){
     let globals = unsafe { &mut *globals_ptr };
-    let mut ft = unsafe { &mut *globals.ft };
+    let ft = unsafe { &mut *globals.ft };
     ft.cleanup();
 }

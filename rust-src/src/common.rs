@@ -1,13 +1,15 @@
 extern crate time;
 extern crate crypto;
 
-use std::net::IpAddr;
-use pnet::packet::ipv4::Ipv4Packet;
-use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum};
-use pnet::packet::ipv6::Ipv6Packet;
-use pnet::packet::{Packet, PacketSize};
+use pnet::packet::tcp::TcpPacket;
+
 use self::crypto::digest::Digest;
-use std::time::{Duration, Instant};
+
+use tls_structs::CipherSuite;
+
+use std::hash::{Hash, Hasher};
+use std::net::IpAddr;
+use std::time::Instant;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ParseError {
@@ -37,14 +39,38 @@ pub enum ParseError {
 
     NotACertificate,
     NotFullCertificate,
+
+    NoServerKeyExchange,
+    UnImplementedCurveType,
+
+    NotACiphersuite,
 }
 
-#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct Flow {
     pub src_ip: IpAddr,
     pub dst_ip: IpAddr,
     pub src_port: u16,
     pub dst_port: u16,
+    pub overflow: usize,
+    pub cipher_suite: CipherSuite,
+}
+
+impl PartialEq for Flow {
+    fn eq(&self, other: &Flow) -> bool {
+        self.src_ip == other.src_ip && self.dst_ip == other.dst_ip && self.src_port == other.src_port && self.dst_port == other.dst_port
+    }
+}
+
+impl Eq for Flow {}
+
+impl Hash for Flow {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.src_ip.hash(state);
+        self.dst_ip.hash(state);
+        self.src_port.hash(state);
+        self.dst_port.hash(state);
+    }
 }
 
 pub struct TimedFlow
@@ -54,12 +80,14 @@ pub struct TimedFlow
 }
 
 impl Flow {
-    pub fn new(src_ip: &IpAddr, dst_ip: &IpAddr, tcp_pkt: &TcpPacket) -> Flow {
+    pub fn new(src_ip: &IpAddr, dst_ip: &IpAddr, tcp_pkt: &TcpPacket, of: usize, cs: CipherSuite) -> Flow {
         Flow {
             src_ip: *src_ip,
             dst_ip: *dst_ip,
             src_port: tcp_pkt.get_source(),
             dst_port: tcp_pkt.get_destination(),
+            overflow: of,
+            cipher_suite: cs,
         }
     }
     pub fn reversed_clone(&self) -> Flow {
@@ -67,6 +95,7 @@ impl Flow {
             src_port: self.dst_port,
             dst_ip: self.src_ip,
             dst_port: self.src_port,
+            ..*self
         }
     }
 }

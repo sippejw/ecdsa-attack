@@ -1,6 +1,5 @@
 extern crate time;
 
-use std::time::{Duration, Instant};
 use std::ops::Sub;
 use common::{ParseError};
 
@@ -54,11 +53,11 @@ impl StatsTracker {
 
         const BYTES_TO_GBPS: f64 = (1000 * 1000 * 1000 / 8) as f64;
 
-        let percent_misparsed;
+        let _percent_misparsed;
         if self.fingerprint_checks != 0 {
-            percent_misparsed = self.client_hello_misparsed as f64 / self.fingerprint_checks as f64;
+            _percent_misparsed = self.client_hello_misparsed as f64 / self.fingerprint_checks as f64;
         } else {
-            percent_misparsed = 0 as f64;
+            _percent_misparsed = 0 as f64;
         }
 
         println!("[STATS] fingerprints: found {:.2} with {:.2} checks; \
@@ -125,6 +124,15 @@ impl StatsTracker {
             }
             ParseError::NotACertificate | ParseError::NotFullCertificate => {
                 panic!("Got NotACertificate error from parsing ClientHello")
+            }
+            ParseError::NoServerKeyExchange => {
+                panic!("Got NoServerKeyExchange error from parsing ClientHello")
+            }
+            ParseError::UnImplementedCurveType => {
+                panic!("Got UnImplementedCurveType error from parsing ClientHello")
+            }
+            ParseError::NotACiphersuite => {
+                panic!("Got NotACiphersuite error from parsing ClientHello")
             }
         }
     }
