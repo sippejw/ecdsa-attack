@@ -5,8 +5,9 @@ use self::num::FromPrimitive;
 use self::openssl::x509::X509;
 
 use common::{Flow, ParseError, u8_to_u16_be, u8_to_u32_be};
-use tls_structs::{CipherSuite, ServerCertificateParseResult, ServerHelloFingerprint, ServerHelloParseResult, 
-    ServerKeyExchangeParseResult, ServerParseResult, ServerReturn, TlsHandshakeType, TlsRecordType, TlsVersion};
+use tls_structs::{CipherSuite, HasSignature, ServerCertificateParseResult, ServerHelloFingerprint, ServerHelloParseResult, 
+    ServerKeyExchange, ServerKeyExchangeParseResult, ServerParseResult, ServerReturn, TlsHandshakeType, TlsRecordType, 
+    TlsVersion};
 
 
 
@@ -250,12 +251,28 @@ pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangePar
     fl.overflow = 0;
     params.extend(a[of+4..of+4+a[of+3] as usize].iter());// all of public key
     // (ec)dh(e)_rsa has a signature, we know whether it was selected from server hello
-    // if Enum.IsDefined(typeof(HasSignature), fl.CipherSuite) {
-    //     println!("has signature");
-    // }
+    of += 4 + a[of+3] as usize;
 
-    Err(ParseError::NoServerKeyExchange)
+    let mut sig: Option<Vec<u8>>;
+    match HasSignature::from_u16(fl.cipher_suite as u16) {
+        Some(hs) => {
+            let mut tmp_sig: Vec<u8> = Vec::new();
+            tmp_sig.extend(a[of..of+2].iter());
+            let sig_len = u8_to_u16_be(a[of+2], a[of+3]) as usize;
+            tmp_sig.extend(a[of+2..of+2+sig_len+2].iter()); // extra two bytes is to include the length of signature
+            sig = Some(tmp_sig);
+        }
+        None => {
+            sig = None;
+        }
+    }
 
+    let ske = ServerKeyExchange {
+        server_params: params,
+        signature: sig,
+    };
+
+    Ok(ske)
 
 }
 

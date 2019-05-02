@@ -242,17 +242,17 @@ impl FlowTracker {
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
                             self.tracked_server_flows.insert(flow, cid);
                         }
-                        None => {println!("got no cert");}
+                        None => {/*println!("got no cert");*/}
 
                     }
 
                     match fp.get_server_key_exchange() {
-                        Some(_) => {
-                            println!("somehow found server key exchange");
+                        Some(ske) => {
+                            println!("server key exchange: {}", ske);
                             self.tracked_server_flows.remove(&flow);
                         }
 
-                        None => {println!("no server key exchange");}
+                        None => {/*println!("no server key exchange");*/}
                     }
                 }
                 Err(err) => {println!("err: {:?}", err)}

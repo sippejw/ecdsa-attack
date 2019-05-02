@@ -1327,3 +1327,35 @@ impl fmt::Display for ServerReturn {
         }
     }
 }
+
+impl fmt::Display for ServerKeyExchange {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut ret_string = String::new();
+        ret_string.push_str("params: 0x");
+
+        for i in 0..self.server_params.len() {
+            if i == 10 {
+                ret_string.push_str("...");
+                break;
+            }
+            ret_string.push_str(&format!(" {:02x}", self.server_params[i]));
+        }
+
+        match self.signature {
+            Some(ref sig) => {
+                let mut sig_string = String::new();
+                sig_string.push_str("signature: 0x");
+                for i in 0..sig.len() {
+                    if i == 10 {
+                        sig_string.push_str("...");
+                        break;
+                    }
+                    sig_string.push_str(&format!(" {:02x}", sig[i]));
+                }
+
+                write!(f, "{}, {}", ret_string, sig_string)
+            }
+            None => {write!(f, "{}, no signature", ret_string)}
+        }
+    }
+}
