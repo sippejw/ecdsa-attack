@@ -241,9 +241,18 @@ pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangePar
     }
 
     // now append the public key, which will include the key length
-    // params.append(a[of+3]); // public key length
-    // params.extend(a[of+4..of+4+a[of+3]].iter());// all of public key
+    params.push(a[of+3]); // public key length
+    if a[of+4..].len() < a[of+3] as usize {
+        println!("Packet doesn't have full server key exchange");
+        return Err(ParseError::ShortBuffer);
+    }
+    // this will have all of server key exchange so we have no more overflow on this flow
+    fl.overflow = 0;
+    params.extend(a[of+4..of+4+a[of+3] as usize].iter());// all of public key
     // (ec)dh(e)_rsa has a signature, we know whether it was selected from server hello
+    // if Enum.IsDefined(typeof(HasSignature), fl.CipherSuite) {
+    //     println!("has signature");
+    // }
 
     Err(ParseError::NoServerKeyExchange)
 
