@@ -105,7 +105,7 @@ fn run_from_pcap(pcap_filename: &str, data_source: Option<&str>){
         },
         Err(e) => {
             println!("\nPCAP Parse error with file '{}'.", pcap_filename);
-            println!("Error => {}", e.description());
+            eprintln!("Error => {}", e);
         },
     }
 }
