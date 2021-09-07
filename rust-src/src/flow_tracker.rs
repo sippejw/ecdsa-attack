@@ -276,12 +276,27 @@ impl FlowTracker {
             let mut thread_db_conn = Client::connect(&dsn, NoTls).unwrap();
 
             // TODO: format these strings to match indentation
-            let insert_fingerprint = match thread_db_conn.prepare("INSERT
-INTO fingerprints (id, record_tls_version, ch_tls_version, cipher_suites, compression_methods, extensions, named_groups, ec_point_fmt, sig_algs, alpn,
-key_share, psk_key_exchange_modes, supported_versions, cert_compression_algs, record_size_limit)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-$11, $12, $13, $14, $15)
-ON CONFLICT (id) DO NOTHING;") {
+            let insert_fingerprint = match thread_db_conn.prepare(
+                "INSERT
+                INTO fingerprints (
+                    id,
+                    record_tls_version,
+                    ch_tls_version,
+                    cipher_suites,
+                    compression_methods,
+                    extensions,
+                    named_groups,
+                    ec_point_fmt,
+                    sig_algs,
+                    alpn,
+                    key_share,
+                    psk_key_exchange_modes,
+                    supported_versions,
+                    cert_compression_algs,
+                    record_size_limit)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ON CONFLICT (id) DO NOTHING;")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     println!("Preparing insert_fingerprint failed: {}", e);
@@ -289,11 +304,13 @@ ON CONFLICT (id) DO NOTHING;") {
                 }
             };
 
-            let insert_measurement = match thread_db_conn.prepare("INSERT
-INTO measurements (unixtime, id, count)
-VALUES ($1, $2, $3)
-ON CONFLICT ON CONSTRAINT measurements_pkey1 DO UPDATE
-  SET count = measurements.count + $4;") {
+            let insert_measurement = match thread_db_conn.prepare(
+                "INSERT
+                INTO measurements (unixtime, id, count)
+                VALUES ($1, $2, $3)
+                ON CONFLICT ON CONSTRAINT measurements_pkey1 DO UPDATE
+                SET count = measurements.count + $4;")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     println!("Preparing insert_measurement failed: {}", e);
@@ -301,10 +318,20 @@ ON CONFLICT ON CONSTRAINT measurements_pkey1 DO UPDATE
                 }
             };
 
-            let insert_sfingerprint = match thread_db_conn.prepare("INSERT
-INTO sfingerprints (id, record_tls_version, sh_tls_version, cipher_suite, compression_method, extensions, eliptic_curves, ec_point_fmt, alpn)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (id) DO NOTHING;") {
+            let insert_sfingerprint = match thread_db_conn.prepare(
+                "INSERT
+                INTO sfingerprints (id,
+                    record_tls_version,
+                    sh_tls_version,
+                    cipher_suite,
+                    compression_method,
+                    extensions,
+                    eliptic_curves,
+                    ec_point_fmt,
+                    alpn)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (id) DO NOTHING;")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     println!("Preparing insert_sfingerprint failed: {}", e);
@@ -312,11 +339,13 @@ ON CONFLICT (id) DO NOTHING;") {
                 }
             };
 
-            let insert_smeasurement = match thread_db_conn.prepare("INSERT
-INTO smeasurements (cid, sid, count)
-VALUES ($1, $2, $3)
-ON CONFLICT ON CONSTRAINT smeasurements_pkey DO UPDATE
-  SET count = smeasurements.count + $4;") {
+            let insert_smeasurement = match thread_db_conn.prepare(
+                "INSERT
+                INTO smeasurements (cid, sid, count)
+                VALUES ($1, $2, $3)
+                ON CONFLICT ON CONSTRAINT smeasurements_pkey DO UPDATE
+                SET count = smeasurements.count + $4;")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     println!("Preparing insert_smeasurement failed: {}", e);
@@ -324,10 +353,12 @@ ON CONFLICT ON CONSTRAINT smeasurements_pkey DO UPDATE
                 }
             };
 
-            let insert_ipv4conn = match thread_db_conn.prepare("INSERT
-INTO ipv4connections (id, sid, anon_cli_ip, server_ip, SNI)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT DO NOTHING;") {
+            let insert_ipv4conn = match thread_db_conn.prepare(
+                "INSERT
+                INTO ipv4connections (id, sid, anon_cli_ip, server_ip, SNI)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT DO NOTHING;")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     println!("Preparing insert_ipv4conn failed: {}", e);
@@ -335,10 +366,12 @@ ON CONFLICT DO NOTHING;") {
                 }
             };
 
-            let insert_ipv6conn = match thread_db_conn.prepare("INSERT
-INTO ipv6connections (id, sid, anon_cli_ip, server_ip, SNI)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT DO NOTHING;") {
+            let insert_ipv6conn = match thread_db_conn.prepare(
+                "INSERT
+                INTO ipv6connections (id, sid, anon_cli_ip, server_ip, SNI)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT DO NOTHING;")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     println!("Preparing insert_ipv6conn failed: {}", e);
@@ -346,11 +379,13 @@ ON CONFLICT DO NOTHING;") {
                 }
             };
 
-            let insert_ticket_size = match thread_db_conn.prepare("INSERT
-INTO ticket_sizes (id, size, count)
-VALUES ($1, $2, $3)
-ON CONFLICT ON CONSTRAINT ticket_sizes_pkey DO UPDATE
-  SET count = ticket_sizes.count + $4;") {
+            let insert_ticket_size = match thread_db_conn.prepare(
+                "INSERT
+                INTO ticket_sizes (id, size, count)
+                VALUES ($1, $2, $3)
+                ON CONFLICT ON CONSTRAINT ticket_sizes_pkey DO UPDATE
+                SET count = ticket_sizes.count + $4;")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     println!("Preparing insert_ticket_size failed: {}", e);
