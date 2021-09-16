@@ -16,6 +16,7 @@ use tls_parser;
 use self::num::FromPrimitive;
 
 use std::fmt;
+use std::net::IpAddr;
 
 enum_from_primitive! {
 #[repr(u8)]
@@ -26,6 +27,42 @@ pub enum TlsRecordType {
 	Handshake        = 22,
 	ApplicationData  = 23,
 	Heartbeat        = 24,
+}
+}
+
+enum_from_primitive! {
+#[repr(u8)]
+#[derive(PartialEq)]
+pub enum TlsAlertLevel {
+    Warning = 1,
+    Fatal = 2,
+}
+}
+
+enum_from_primitive! {
+#[repr(u8)]
+#[derive(PartialEq)]
+pub enum TlsAlertMessage {
+    CloseNotify = 0,
+    UnexpectedMessage = 10,
+    BadRecordMac = 20,
+    DecryptionFailed = 21,
+    RecordOverflow = 22,
+    DecompressionFailure = 30,
+    HandshakeFailure = 40,
+    NoCertificate = 41,
+    BadCertificate = 42,
+    UnsupportedCertificate = 43,
+    CertificateRevoked = 44,
+    CertificateExpired = 45,
+    CertificateUnknown = 46,
+    IllegalParameter = 47,
+    UnknownCA = 48,
+    AccessDenied = 49,
+    DecodeError = 50,
+    DecryptError = 51,
+    ExportRestriction = 60,
+    ProtocolVersion = 70,
 }
 }
 
@@ -631,6 +668,34 @@ pub enum HasSignature {
 }
 }
 
+pub struct Primer {
+    pub client_random: Vec<u8>,
+    pub server_random: Vec<u8>,
+    pub server_params: Vec<u8>,
+    pub server_ip: IpAddr,
+    pub client_ip: IpAddr,
+    pub certificate: Option<openssl::x509::X509>,
+    pub cipher_suite: CipherSuite,
+    pub alert_message: TlsAlertMessage,
+    pub is_complete: bool,
+}
+
+impl Primer {
+    pub fn new(cli_random: Vec<u8>, cli_ip: &IpAddr, serv_ip: &IpAddr) -> Primer {
+        Primer {
+            client_random: cli_random,
+            server_random: Vec::new(),
+            server_params: Vec::new(),
+            server_ip: *serv_ip,
+            client_ip: *cli_ip,
+            certificate: None,
+            cipher_suite: CipherSuite::TlsNullWithNullNull,
+            alert_message: TlsAlertMessage::CloseNotify,
+            is_complete: false,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct ClientHelloFingerprint {
     pub record_tls_version: TlsVersion,
@@ -915,6 +980,87 @@ impl fmt::Display for ClientHelloFingerprint {
                self.alpn.as_slice().as_hex(),
                String::from_utf8_lossy(self.sni.clone().as_slice()),
         )
+    }
+}
+
+pub struct ClientKeyExchange {
+    pub pub_key: Vec<u8>
+}
+
+pub type ClientKeyExchangeParseResult = Result<ClientKeyExchange, ParseError>;
+impl ClientKeyExchange {
+    pub fn from_try(a: &[u8]) -> ClientKeyExchangeParseResult {
+        let record_type = a[0];
+        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+            return Err(ParseError::NotAnAlert)
+        }
+
+        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
+            Some(tls_version) => tls_version,
+            None => return Err(ParseError::UnknownRecordTLSVersion)
+        };
+
+        let record_length = u8_to_u16_be(a[3], a[4]);
+        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
+            return Err(ParseError::ShortOuterRecord);
+        }
+
+        let handshake_type = a[5];
+        if TlsHandshakeType::from_u8(handshake_type) != Some(TlsHandshakeType::ClientKeyExchange) {
+            return Err(ParseError::NotAClientKeyExchange)
+        }
+
+        let pub_key_len = a[9] as usize;
+        let pub_key = a[10 .. pub_key_len].to_vec();
+
+        let mut cke = ClientKeyExchange {
+            pub_key: pub_key,
+        };
+
+        Ok(cke)
+    }
+}
+
+pub struct TlsAlert {
+    pub level: TlsAlertLevel,
+    pub description: TlsAlertMessage,
+}
+
+pub type TlsAlertParseResult = Result<TlsAlert, ParseError>;
+impl TlsAlert {
+    pub fn from_try(a: &[u8]) -> TlsAlertParseResult {
+
+        let record_type = a[0];
+        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Alert) {
+            return Err(ParseError::NotAnAlert)
+        }
+
+        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
+            Some(tls_version) => tls_version,
+            None => return Err(ParseError::UnknownRecordTLSVersion)
+        };
+
+        let record_length = u8_to_u16_be(a[3], a[4]);
+        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
+            return Err(ParseError::ShortOuterRecord);
+        }
+
+        let a_level = match TlsAlertLevel::from_u8(a[5]) {
+            Some(alert_level) => alert_level,
+            None => return Err(ParseError::UnknownAlertLevel)
+        };
+
+        let a_message = match TlsAlertMessage::from_u8(a[5]) {
+            Some(alert_message) => alert_message,
+            None => return Err(ParseError::UnknownAlertMessage)
+        };
+
+        let mut alert = TlsAlert {
+            level: a_level,
+            description: a_message,
+        };
+
+        Ok(alert)
     }
 }
 

@@ -4,7 +4,7 @@ use std::collections::{HashSet, HashMap};
 use std::mem;
 use common::{Flow, ConnectionIPv6, ConnectionIPv4, u8_to_u16_be, u8_to_u32_be, u8array_to_u32_be};
 use std::net::IpAddr;
-use tls_structs::{ClientHelloFingerprint, ServerHelloFingerprint};
+use tls_structs::{CipherSuite, ClientHelloFingerprint, ServerHelloFingerprint, Primer, TlsAlertMessage};
 
 // to ease load on db, cache queries
 pub struct MeasurementCache {
@@ -20,6 +20,9 @@ pub struct MeasurementCache {
     sfingerprints_new: HashMap<i64, ServerHelloFingerprint>,
     sfingerprints_flushed: HashSet<i64>,
     // for connections
+
+    primers_new: HashMap<Flow, Primer>,
+    primers_flushed: HashSet<Flow>,
 
     ticket_sizes: HashMap<(i64, i16), i64>, // (ClientHelloID, ticket_size) -> count
 
@@ -42,6 +45,9 @@ impl MeasurementCache {
             smeasurements: HashMap::new(),
             sfingerprints_flushed: HashSet::new(),
             sfingerprints_new: HashMap::new(),
+
+            primers_flushed: HashSet::new(),
+            primers_new: HashMap::new(),
 
             ticket_sizes: HashMap::new(),
 
@@ -78,6 +84,53 @@ impl MeasurementCache {
     pub fn add_sfingerprint(&mut self, sid: i64, fp: ServerHelloFingerprint) {
         if !self.sfingerprints_flushed.contains(&sid) {
             self.sfingerprints_new.insert(sid, fp);
+        }
+    }
+
+    pub fn add_primer(&mut self, flow: &Flow, primer: Primer) {
+        if !self.primers_flushed.contains(&flow) {
+            self.primers_new.insert(*flow, primer);
+        }
+    }
+
+    pub fn update_primer_with_cs_sr(&mut self, flow: &Flow, cs: CipherSuite, sr: Vec<u8>)
+    {
+        match self.primers_new.get_mut(&flow) {
+            Some(mut primer) => primer.cipher_suite = cs,
+            Some(mut primer) => primer.server_random = sr,
+            _ => {}
+        }
+    }
+
+    pub fn update_primer_with_cert(&mut self, flow: &Flow, cert: openssl::x509::X509)
+    {
+        match self.primers_new.get_mut(&flow) {
+            Some(mut primer) => primer.certificate = Some(cert),
+            _ => {}
+        }
+    }
+
+    pub fn update_primer_with_sp(&mut self, flow: &Flow, sp: Vec<u8>)
+    {
+        match self.primers_new.get_mut(&flow) {
+            Some(mut primer) => primer.server_params = sp,
+            _ => {}
+        }
+    }
+
+    pub fn update_primer_with_alert(&mut self, flow: &Flow, message: TlsAlertMessage)
+    {
+        match self.primers_new.get_mut(&flow) {
+            Some(mut primer) => primer.alert_message = message,
+            _ => {}
+        }
+    }
+
+    pub fn update_primer_complete(&mut self, flow: &Flow)
+    {
+        match self.primers_new.get_mut(&flow) {
+            Some(mut primer) => primer.is_complete = true,
+            _ => {}
         }
     }
 
@@ -193,6 +246,20 @@ impl MeasurementCache {
             self.sfingerprints_flushed.insert(*sid);
         }
         mem::replace(&mut self.sfingerprints_new, HashMap::new())
+    }
+
+    // Confirms Primer is complete
+    // Returns cached HashMap of primers, empties it into object
+    pub fn flush_primers(&mut self) -> HashMap<Flow, Primer> {
+        self.last_flush = time::now();
+        let mut primers_new = HashMap::new();
+        for (flow, primer) in self.primers_new.iter() {
+            if primer.is_complete {
+                self.primers_flushed.insert(*flow);
+            }
+        }
+        //let incomplete = self.primers_new.into_iter().filter(|x| x.isIncomplete()).collect();
+        mem::replace(&mut self.primers_new, primers_new)
     }
 
     fn get_ipv4connections_to_flush(&self) -> HashSet<Flow> {

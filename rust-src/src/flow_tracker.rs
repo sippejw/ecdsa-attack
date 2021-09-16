@@ -19,7 +19,7 @@ use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use common::{TimedFlow, Flow};
 use stats_tracker::StatsTracker;
 use tls_parser;
-use tls_structs::{CipherSuite, ClientHelloFingerprint};
+use tls_structs::{CipherSuite, ClientHelloFingerprint, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -161,6 +161,8 @@ impl FlowTracker {
                     self.stats.fingerprints_seen += 1;
                     let fp_id = fp.get_fingerprint();
 
+                    let primer = Primer::new(fp.client_random.clone(), &source, &destination);
+
                     self.begin_tracking_server_flow(&flow.reversed_clone(), fp_id as i64);
 
                     let mut curr_time = time::now();
@@ -176,6 +178,9 @@ impl FlowTracker {
                             MEASUREMENT_CACHE_FLUSH {
                             self.flush_to_db()
                         }
+
+                        // insert primer
+                        self.cache.add_primer(&flow, primer);
 
                         // insert size of session ticket, if any
                         fp.ticket_size.map(|size| self.cache.add_ticket_size(fp_id as i64, size));
@@ -194,6 +199,21 @@ impl FlowTracker {
                 Err(err) => {
                     self.stats.store_clienthello_error(err);
                 }
+            }
+            match TlsAlert::from_try(tcp_pkt.payload()) {
+                Ok(alert) => {
+                    self.cache.update_primer_with_alert(&flow, alert.description);
+                    if alert.level == TlsAlertLevel::Fatal {
+                        self.cache.update_primer_complete(&flow)
+                    }
+                }
+                Err(err) => {println!("err: {:?}", err)}
+            }
+            match ClientKeyExchange::from_try(tcp_pkt.payload()) {
+                Ok(cke) => {
+                    self.cache.update_primer_complete(&flow);
+                }
+                Err(err) => {println!("err: {:?}", err)}
             }
             self.tracked_flows.remove(&flow);
             return;
@@ -231,6 +251,7 @@ impl FlowTracker {
                                 // self.cache.add_sfingerprint(sid, fp);
                                 // self.cache.add_smeasurement(cid, sid);
                                 // self.cache.update_connection_with_sid(&flow.reversed_clone(), sid);
+                                self.cache.update_primer_with_cs_sr(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
                             }
                         }
                         None => {}
@@ -240,6 +261,7 @@ impl FlowTracker {
                         Some(ref cert) => {
                             println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
                             // replace flow with new overflow one
+                            self.cache.update_primer_with_cert(&flow.reversed_clone(), cert.clone().clone());
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
                             self.tracked_server_flows.insert(flow, cid);
                         }
@@ -250,6 +272,7 @@ impl FlowTracker {
                     match fp.get_server_key_exchange() {
                         Some(ske) => {
                             println!("server key exchange: {}", ske);
+                            self.cache.update_primer_with_sp(&flow.reversed_clone(), ske.server_params.clone());
                             self.tracked_server_flows.remove(&flow);
                         }
 
@@ -266,6 +289,7 @@ impl FlowTracker {
         let client_fcache = self.cache.flush_fingerprints();
         let server_mcache = self.cache.flush_smeasurements();
         let server_fcache = self.cache.flush_sfingerprints();
+        let pcache = self.cache.flush_primers();
         let c4cache = self.cache.flush_ipv4connections();
         let c6cache = self.cache.flush_ipv6connections();
         let ticket_sizes = self.cache.flush_ticket_sizes();
@@ -275,7 +299,6 @@ impl FlowTracker {
             let inserter_thread_start = time::now();
             let mut thread_db_conn = Client::connect(&dsn, NoTls).unwrap();
 
-            // TODO: format these strings to match indentation
             let insert_fingerprint = match thread_db_conn.prepare(
                 "INSERT
                 INTO fingerprints (
@@ -393,6 +416,27 @@ impl FlowTracker {
                 }
             };
 
+            let insert_primer = match thread_db_conn.prepare(
+                "INSERT
+                INTO primers (
+                    client_random,
+                    server_random,
+                    server_params,
+                    server_ip,
+                    client_ip,
+                    cipher_suite,
+                    is_alert)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT DO NOTHING;"
+            )
+            {
+                Ok(stmt) => stmt,
+                Err(e) => {
+                    println!("Preparing insert_primer failed: {}", e);
+                    return;
+                }
+            };
+
             for (fp_id, fp) in client_fcache {
                 let updated_rows = thread_db_conn.execute(&insert_fingerprint, &[&(fp_id as i64),
                 &(fp.record_tls_version as i16), &(fp.ch_tls_version as i16),
@@ -428,6 +472,15 @@ impl FlowTracker {
                     &(count), &(count)]);
                 if updated_rows.is_err() {
                     println!("Error updating smeasurements: {:?}", updated_rows);
+                }
+            }
+
+            for (k, primer) in pcache {
+                let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.client_random),
+                    &(primer.server_random), &(primer.server_params), &(primer.server_ip),
+                    &(primer.client_ip), &(primer.alert_message as i8),]);
+                if updated_rows.is_err() {
+                    println!("Error updating primers: {:?}", updated_rows)
                 }
             }
 

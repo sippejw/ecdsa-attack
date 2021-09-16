@@ -26,6 +26,10 @@ pub enum ParseError {
     ExtensionsLenExceedBuf,
     ShortExtensionHeader,
     ExtensionLenExceedBuf,
+    NotAnAlert,
+    UnknownAlertLevel,
+    UnknownAlertMessage,
+    NotAClientKeyExchange,
 
     NotAServerHello,
 
