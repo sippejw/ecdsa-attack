@@ -102,10 +102,10 @@ impl MeasurementCache {
         }
     }
 
-    pub fn update_primer_with_cert(&mut self, flow: &Flow, cert: openssl::x509::X509)
+    pub fn update_primer_with_pub(&mut self, flow: &Flow, pub_key: Vec<u8>)
     {
         match self.primers_new.get_mut(&flow) {
-            Some(mut primer) => primer.certificate = Some(cert),
+            Some(mut primer) => primer.pub_key = pub_key,
             _ => {}
         }
     }
@@ -257,11 +257,11 @@ impl MeasurementCache {
             if primer.is_complete {
                 self.primers_flushed.insert(*flow);
             }
-            else {
+            // If primer is less than a minute old add it to new hash map
+            else if primer.start_time - time::now().to_timespec().sec < MEASUREMENT_CACHE_FLUSH {
                 primers_new.insert(*flow, primer.clone());
             }
         }
-        //let incomplete = self.primers_new.into_iter().filter(|x| x.isIncomplete()).collect();
         mem::replace(&mut self.primers_new, primers_new)
     }
 

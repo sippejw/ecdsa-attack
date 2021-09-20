@@ -32,7 +32,7 @@ pub enum TlsRecordType {
 
 enum_from_primitive! {
 #[repr(u8)]
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum TlsAlertLevel {
     Warning = 1,
     Fatal = 2,
@@ -41,7 +41,7 @@ pub enum TlsAlertLevel {
 
 enum_from_primitive! {
 #[repr(u8)]
-#[derive(PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum TlsAlertMessage {
     CloseNotify = 0,
     UnexpectedMessage = 10,
@@ -675,10 +675,11 @@ pub struct Primer {
     pub server_params: Vec<u8>,
     pub server_ip: IpAddr,
     pub client_ip: IpAddr,
-    pub certificate: Option<openssl::x509::X509>,
+    pub pub_key: Vec<u8>,
     pub cipher_suite: CipherSuite,
     pub alert_message: TlsAlertMessage,
     pub is_complete: bool,
+    pub start_time: i64
 }
 
 impl Primer {
@@ -689,11 +690,27 @@ impl Primer {
             server_params: Vec::new(),
             server_ip: *serv_ip,
             client_ip: *cli_ip,
-            certificate: None,
+            pub_key: Vec::new(),
             cipher_suite: CipherSuite::TlsNullWithNullNull,
             alert_message: TlsAlertMessage::CloseNotify,
             is_complete: false,
+            start_time: time::now().to_timespec().sec,
         }
+    }
+}
+
+impl fmt::Display for Primer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "client_random: {:?} server_random: {:?} server_ip: {} client_ip: {} pub_key: {:?} \
+        cipher_suite: {:?} alert_message: {:?}",
+               self.client_random,
+               self.server_random,
+               self.server_ip,
+               self.client_ip,
+               self.pub_key,
+               self.cipher_suite,
+               self.alert_message,
+        )
     }
 }
 
@@ -1022,6 +1039,7 @@ impl ClientKeyExchange {
     }
 }
 
+#[derive(Debug)]
 pub struct TlsAlert {
     pub level: TlsAlertLevel,
     pub description: TlsAlertMessage,

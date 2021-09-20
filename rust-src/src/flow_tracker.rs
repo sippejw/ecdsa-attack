@@ -170,6 +170,8 @@ impl FlowTracker {
                     if self.write_to_stdout {
                         println!("ClientHello: {{ id: {} t: {} {}}}",
                                  fp_id, curr_time.to_timespec().sec, fp);
+                        println!("Primer: {{Client Random: {:?} t: {}}}",
+                                    primer.client_random, curr_time.to_timespec().sec);
                     }
 
                     if self.write_to_db {
@@ -200,22 +202,25 @@ impl FlowTracker {
                     self.stats.store_clienthello_error(err);
                 }
             }
+            match ClientKeyExchange::from_try(tcp_pkt.payload()) {
+                Ok(cke) => {
+                    println!("Primer: {{Alert: false}}");
+                    self.cache.update_primer_complete(&flow);
+                    self.tracked_flows.remove(&flow);
+                }
+                Err(err) => {println!("err: {:?}", err)}
+            }
             match TlsAlert::from_try(tcp_pkt.payload()) {
                 Ok(alert) => {
                     self.cache.update_primer_with_alert(&flow, alert.description);
                     if alert.level == TlsAlertLevel::Fatal {
-                        self.cache.update_primer_complete(&flow)
+                        println!("Primer: {{Alert: true}}");
+                        self.cache.update_primer_complete(&flow);
+                        self.tracked_flows.remove(&flow);
                     }
                 }
                 Err(err) => {println!("err: {:?}", err)}
             }
-            match ClientKeyExchange::from_try(tcp_pkt.payload()) {
-                Ok(cke) => {
-                    self.cache.update_primer_complete(&flow);
-                }
-                Err(err) => {println!("err: {:?}", err)}
-            }
-            self.tracked_flows.remove(&flow);
             return;
         }
 
@@ -244,6 +249,8 @@ impl FlowTracker {
                             if self.write_to_stdout {
                                 println!("ServerHello: {{ sid: {} cid: {} sh: {}}}",
                                         sid, cid, sh);
+                                println!("Primer: {{Server Random: {:?}}}",
+                                        sh.server_random);
                             }
 
                             // need to re-write this to handle that fp is now a general return
@@ -261,7 +268,7 @@ impl FlowTracker {
                         Some(ref cert) => {
                             println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
                             // replace flow with new overflow one
-                            self.cache.update_primer_with_cert(&flow.reversed_clone(), cert.clone().clone());
+                            self.cache.update_primer_with_pub(&flow.reversed_clone(), cert.public_key().unwrap().public_key_to_der().unwrap());
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
                             self.tracked_server_flows.insert(flow, cid);
                         }
