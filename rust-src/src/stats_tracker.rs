@@ -17,6 +17,8 @@ pub struct StatsTracker {
     pub not_a_clienthello: u64,
     pub extension_misparsed: u64,
     pub client_hello_misparsed: u64,
+    pub not_a_client_key_exchange: u64,
+    pub alert_misparsed: u64,
 }
 
 impl StatsTracker {
@@ -33,6 +35,8 @@ impl StatsTracker {
             not_a_clienthello: 0,
             extension_misparsed: 0,
             client_hello_misparsed: 0,
+            not_a_client_key_exchange: 0,
+            alert_misparsed: 0,
         }
     }
 
@@ -118,6 +122,16 @@ impl StatsTracker {
             ParseError::SupportedVersionsExtLenMisparse => {
                 println!("{:?}", err);
                 self.extension_misparsed += 1;
+            }
+            ParseError::NotAClientKeyExchange => {
+                println!("{:?}", err);
+                self.not_a_client_key_exchange += 1;
+            }
+            ParseError::NotAnAlert |
+            ParseError::UnknownAlertLevel |
+            ParseError::UnknownAlertMessage => {
+                println!("{:?}", err);
+                self.alert_misparsed += 1;
             }
             ParseError::NotAServerHello => {
                 panic!("Got NotAServerHello error from parsing ClientHello")

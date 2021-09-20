@@ -41,7 +41,7 @@ pub enum TlsAlertLevel {
 
 enum_from_primitive! {
 #[repr(u8)]
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum TlsAlertMessage {
     CloseNotify = 0,
     UnexpectedMessage = 10,
@@ -668,6 +668,7 @@ pub enum HasSignature {
 }
 }
 
+#[derive(Clone)]
 pub struct Primer {
     pub client_random: Vec<u8>,
     pub server_random: Vec<u8>,
@@ -995,7 +996,7 @@ impl ClientKeyExchange {
             return Err(ParseError::NotAnAlert)
         }
 
-        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
+        let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
             Some(tls_version) => tls_version,
             None => return Err(ParseError::UnknownRecordTLSVersion)
         };
@@ -1013,7 +1014,7 @@ impl ClientKeyExchange {
         let pub_key_len = a[9] as usize;
         let pub_key = a[10 .. pub_key_len].to_vec();
 
-        let mut cke = ClientKeyExchange {
+        let cke = ClientKeyExchange {
             pub_key: pub_key,
         };
 
@@ -1035,7 +1036,7 @@ impl TlsAlert {
             return Err(ParseError::NotAnAlert)
         }
 
-        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
+        let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
             Some(tls_version) => tls_version,
             None => return Err(ParseError::UnknownRecordTLSVersion)
         };
@@ -1055,7 +1056,7 @@ impl TlsAlert {
             None => return Err(ParseError::UnknownAlertMessage)
         };
 
-        let mut alert = TlsAlert {
+        let alert = TlsAlert {
             level: a_level,
             description: a_message,
         };
@@ -1153,32 +1154,32 @@ pub struct ServerKeyExchange {
 }
 
 pub trait ServerHelloAccessors {
-    fn set_record_tls_version(&mut self, TlsVersion);
+    fn set_record_tls_version(&mut self, _: TlsVersion);
     fn get_record_tls_version(&self) -> Option<TlsVersion>;
 
-    fn set_sh_tls_version(&mut self, TlsVersion);
+    fn set_sh_tls_version(&mut self, _: TlsVersion);
     fn get_sh_tls_version(&self) -> Option<TlsVersion>;
 
-    fn set_server_random(&mut self, Vec<u8>);
+    fn set_server_random(&mut self, _: Vec<u8>);
     fn get_server_random(&self) -> Option<&Vec<u8>>;
 
-    fn set_cipher_suite(&mut self, CipherSuite);
+    fn set_cipher_suite(&mut self, _: CipherSuite);
     fn get_cipher_suite(&self) -> Option<CipherSuite>;
 
-    fn set_compression_method(&mut self, u8);
+    fn set_compression_method(&mut self, _: u8);
     fn get_compression_method(&self) -> Option<u8>;
 
-    fn set_extensions(&mut self, Vec<u8>);
+    fn set_extensions(&mut self, _: Vec<u8>);
     fn get_extensions(&self) -> Option<&Vec<u8>>;
-    fn append_extensions(&mut self, &mut Vec<u8>);
+    fn append_extensions(&mut self, _: &mut Vec<u8>);
 
-    fn set_elliptic_curves(&mut self, Vec<u8>);
+    fn set_elliptic_curves(&mut self, _: Vec<u8>);
     fn get_elliptic_curves(&self) -> Option<&Vec<u8>>;
 
-    fn set_ec_point_fmt(&mut self, Vec<u8>);
+    fn set_ec_point_fmt(&mut self, _: Vec<u8>);
     fn get_ec_point_fmt(&self) -> Option<&Vec<u8>>;
 
-    fn set_alpn(&mut self, Vec<u8>);
+    fn set_alpn(&mut self, _: Vec<u8>);
     fn get_alpn(&self) -> Option<&Vec<u8>>;
 }
 

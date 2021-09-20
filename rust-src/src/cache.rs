@@ -257,6 +257,9 @@ impl MeasurementCache {
             if primer.is_complete {
                 self.primers_flushed.insert(*flow);
             }
+            else {
+                primers_new.insert(*flow, primer.clone());
+            }
         }
         //let incomplete = self.primers_new.into_iter().filter(|x| x.isIncomplete()).collect();
         mem::replace(&mut self.primers_new, primers_new)

@@ -17,7 +17,6 @@ use pnet::datalink::{self, NetworkInterface};
 use pnet::datalink::Channel::Ethernet;
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
 use std::time::{Instant, Duration};
-use std::error::Error;
 use pcap::Capture;
 use clap::{Arg, App};
 use flow_tracker::FlowTracker;

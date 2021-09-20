@@ -15,4 +15,6 @@ Cargo.lock
 .vscode/
 
 # Verify Pcap Executable
-verify_pcap
+VerifyPcap
+
+.DS_Store

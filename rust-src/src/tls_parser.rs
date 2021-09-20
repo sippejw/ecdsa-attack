@@ -257,9 +257,9 @@ pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangePar
     // (ec)dh(e)_rsa has a signature, we know whether it was selected from server hello
     of += 4 + a[of+3] as usize;
 
-    let mut sig: Option<Vec<u8>>;
+    let sig: Option<Vec<u8>>;
     match HasSignature::from_u16(fl.cipher_suite as u16) {
-        Some(hs) => {
+        Some(_hs) => {
             let mut tmp_sig: Vec<u8> = Vec::new();
             tmp_sig.extend(a[of..of+2].iter());
             let sig_len = u8_to_u16_be(a[of+2], a[of+3]) as usize;
