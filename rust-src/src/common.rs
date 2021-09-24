@@ -30,6 +30,7 @@ pub enum ParseError {
     UnknownAlertLevel,
     UnknownAlertMessage,
     NotAClientKeyExchange,
+    NotApplicationData,
 
     NotAServerHello,
 

@@ -19,7 +19,7 @@ use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use common::{TimedFlow, Flow};
 use stats_tracker::StatsTracker;
 use tls_parser;
-use tls_structs::{CipherSuite, ClientHelloFingerprint, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel};
+use tls_structs::{CipherSuite, ClientHelloFingerprint, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, ApplicationData};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -161,7 +161,7 @@ impl FlowTracker {
                     self.stats.fingerprints_seen += 1;
                     let fp_id = fp.get_fingerprint();
 
-                    let primer = Primer::new(fp.client_random.clone(), &source, &destination);
+                    let primer = Primer::new(fp.client_random.clone());
 
                     self.begin_tracking_server_flow(&flow.reversed_clone(), fp_id as i64);
 
@@ -201,6 +201,12 @@ impl FlowTracker {
                 Err(err) => {
                     self.stats.store_clienthello_error(err);
                 }
+            }
+            match ApplicationData::from_try(tcp_pkt.payload()) {
+                Ok(_) => {
+                    self.tracked_flows.remove(&flow);
+                }
+                Err(err) => {println!("err: {:?}", err)}
             }
             match ClientKeyExchange::from_try(tcp_pkt.payload()) {
                 Ok(cke) => {
@@ -429,11 +435,10 @@ impl FlowTracker {
                     client_random,
                     server_random,
                     server_params,
-                    server_ip,
-                    client_ip,
                     cipher_suite,
-                    is_alert)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    tls_alert,
+                    pub_key)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT DO NOTHING;"
             )
             {
@@ -484,8 +489,7 @@ impl FlowTracker {
 
             for (k, primer) in pcache {
                 let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.client_random),
-                    &(primer.server_random), &(primer.server_params), &(primer.server_ip),
-                    &(primer.client_ip), &(primer.alert_message as i8),]);
+                    &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key)]);
                 if updated_rows.is_err() {
                     println!("Error updating primers: {:?}", updated_rows)
                 }

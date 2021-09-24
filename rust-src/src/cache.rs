@@ -96,7 +96,7 @@ impl MeasurementCache {
     pub fn update_primer_with_cs_sr(&mut self, flow: &Flow, cs: CipherSuite, sr: Vec<u8>)
     {
         match self.primers_new.get_mut(&flow) {
-            Some(mut primer) => primer.cipher_suite = cs,
+            Some(mut primer) => primer.cipher_suite = cs as u16,
             Some(mut primer) => primer.server_random = sr,
             _ => {}
         }

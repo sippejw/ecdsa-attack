@@ -673,25 +673,21 @@ pub struct Primer {
     pub client_random: Vec<u8>,
     pub server_random: Vec<u8>,
     pub server_params: Vec<u8>,
-    pub server_ip: IpAddr,
-    pub client_ip: IpAddr,
     pub pub_key: Vec<u8>,
-    pub cipher_suite: CipherSuite,
+    pub cipher_suite: u16,
     pub alert_message: TlsAlertMessage,
     pub is_complete: bool,
     pub start_time: i64
 }
 
 impl Primer {
-    pub fn new(cli_random: Vec<u8>, cli_ip: &IpAddr, serv_ip: &IpAddr) -> Primer {
+    pub fn new(cli_random: Vec<u8>) -> Primer {
         Primer {
             client_random: cli_random,
             server_random: Vec::new(),
             server_params: Vec::new(),
-            server_ip: *serv_ip,
-            client_ip: *cli_ip,
             pub_key: Vec::new(),
-            cipher_suite: CipherSuite::TlsNullWithNullNull,
+            cipher_suite: 0x0000,
             alert_message: TlsAlertMessage::CloseNotify,
             is_complete: false,
             start_time: time::now().to_timespec().sec,
@@ -701,12 +697,10 @@ impl Primer {
 
 impl fmt::Display for Primer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "client_random: {:?} server_random: {:?} server_ip: {} client_ip: {} pub_key: {:?} \
+        write!(f, "client_random: {:?} server_random: {:?} pub_key: {:?} \
         cipher_suite: {:?} alert_message: {:?}",
                self.client_random,
                self.server_random,
-               self.server_ip,
-               self.client_ip,
                self.pub_key,
                self.cipher_suite,
                self.alert_message,
@@ -1001,6 +995,32 @@ impl fmt::Display for ClientHelloFingerprint {
     }
 }
 
+pub struct ApplicationData {
+    pub length: u16
+}
+pub type ApplicationDataParseResult = Result<ApplicationData, ParseError>;
+impl ApplicationData {
+    pub fn from_try(a: &[u8]) -> ApplicationDataParseResult {
+        let record_type = a[0];
+        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::ApplicationData) {
+            return Err(ParseError::NotApplicationData)
+        }
+        let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
+            Some(tls_version) => tls_version,
+            None => return Err(ParseError::UnknownRecordTLSVersion)
+        };
+
+        let record_length = u8_to_u16_be(a[3], a[4]);
+        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
+            return Err(ParseError::ShortOuterRecord);
+        }
+        let ad = ApplicationData {
+            length: record_length,
+        };
+        Ok(ad)
+    }
+}
+
 pub struct ClientKeyExchange {
     pub pub_key: Vec<u8>
 }
@@ -1010,7 +1030,7 @@ impl ClientKeyExchange {
     pub fn from_try(a: &[u8]) -> ClientKeyExchangeParseResult {
         let record_type = a[0];
         if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
-            return Err(ParseError::NotAnAlert)
+            return Err(ParseError::NotAHandshake)
         }
 
         let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
