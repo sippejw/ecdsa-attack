@@ -30,7 +30,6 @@ pub enum ParseError {
     UnknownAlertLevel,
     UnknownAlertMessage,
     NotAClientKeyExchange,
-    NotApplicationData,
 
     NotAServerHello,
 
@@ -49,6 +48,8 @@ pub enum ParseError {
     UnImplementedCurveType,
 
     NotACiphersuite,
+
+    MissedServerResponse
 }
 
 #[derive(Copy, Clone, Debug)]

@@ -4,7 +4,7 @@ use std::collections::{HashSet, HashMap};
 use std::mem;
 use common::{Flow, ConnectionIPv6, ConnectionIPv4, u8_to_u16_be, u8_to_u32_be, u8array_to_u32_be};
 use std::net::IpAddr;
-use tls_structs::{CipherSuite, ClientHelloFingerprint, ServerHelloFingerprint, Primer, TlsAlertMessage};
+use tls_structs::{CipherSuite, ClientHelloFingerprint, ServerHelloFingerprint, Primer, TlsAlertMessage, TlsHandshakeType};
 
 // to ease load on db, cache queries
 pub struct MeasurementCache {
@@ -93,27 +93,36 @@ impl MeasurementCache {
         }
     }
 
-    pub fn update_primer_with_cs_sr(&mut self, flow: &Flow, cs: CipherSuite, sr: Vec<u8>)
+    pub fn update_primer_server_hello(&mut self, flow: &Flow, cs: CipherSuite, sr: Vec<u8>)
     {
         match self.primers_new.get_mut(&flow) {
-            Some(mut primer) => primer.cipher_suite = cs as u16,
-            Some(mut primer) => primer.server_random = sr,
+            Some(mut primer) => {
+                primer.cipher_suite = cs as u16;
+                primer.server_random = sr;
+                primer.next_state = TlsHandshakeType::Certificate;
+            },
             _ => {}
         }
     }
 
-    pub fn update_primer_with_pub(&mut self, flow: &Flow, pub_key: Vec<u8>)
+    pub fn update_primer_certificate(&mut self, flow: &Flow, pub_key: Vec<u8>)
     {
         match self.primers_new.get_mut(&flow) {
-            Some(mut primer) => primer.pub_key = pub_key,
+            Some(mut primer) => {
+                primer.pub_key = pub_key;
+                primer.next_state = TlsHandshakeType::ServerKeyExchange;
+            } ,
             _ => {}
         }
     }
 
-    pub fn update_primer_with_sp(&mut self, flow: &Flow, sp: Vec<u8>)
+    pub fn update_primer_ske(&mut self, flow: &Flow, sp: Vec<u8>)
     {
         match self.primers_new.get_mut(&flow) {
-            Some(mut primer) => primer.server_params = sp,
+            Some(mut primer) => {
+                primer.server_params = sp;
+                primer.next_state = TlsHandshakeType::ClientKeyExchange;
+            },
             _ => {}
         }
     }
@@ -123,6 +132,14 @@ impl MeasurementCache {
         match self.primers_new.get_mut(&flow) {
             Some(mut primer) => primer.alert_message = message,
             _ => {}
+        }
+    }
+
+    pub fn get_primer_state(&mut self, flow: &Flow) -> TlsHandshakeType
+    {
+        match self.primers_new.get(&flow) {
+            Some(primer) => return primer.next_state.clone(),
+            _ => return TlsHandshakeType::ClientHello
         }
     }
 

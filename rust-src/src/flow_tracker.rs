@@ -16,10 +16,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
-use common::{TimedFlow, Flow};
+use common::{TimedFlow, Flow, ParseError};
 use stats_tracker::StatsTracker;
 use tls_parser;
-use tls_structs::{CipherSuite, ClientHelloFingerprint, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, ApplicationData};
+use tls_structs::{CipherSuite, ClientHelloFingerprint, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, TlsHandshakeType};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -156,76 +156,92 @@ impl FlowTracker {
         // check for ClientHello
         if is_client && self.tracked_flows.contains(&flow) {
             self.stats.fingerprint_checks += 1;
-            match ClientHelloFingerprint::from_try(tcp_pkt.payload()) {
-                Ok(fp) => {
-                    self.stats.fingerprints_seen += 1;
-                    let fp_id = fp.get_fingerprint();
-
-                    let primer = Primer::new(fp.client_random.clone());
-
-                    self.begin_tracking_server_flow(&flow.reversed_clone(), fp_id as i64);
-
-                    let mut curr_time = time::now();
-
-                    if self.write_to_stdout {
-                        println!("ClientHello: {{ id: {} t: {} {}}}",
-                                 fp_id, curr_time.to_timespec().sec, fp);
-                        println!("Primer: {{Client Random: {:?} t: {}}}",
-                                    primer.client_random, curr_time.to_timespec().sec);
-                    }
-
-                    if self.write_to_db {
-                        // once in a while -- flush everything
-                        if curr_time.to_timespec().sec - self.cache.last_flush.to_timespec().sec >
-                            MEASUREMENT_CACHE_FLUSH {
-                            self.flush_to_db()
+            let next_state = self.cache.get_primer_state(&flow);
+            println!("state: {:?}", next_state);
+            match next_state {
+                TlsHandshakeType::ClientKeyExchange => {
+                    match ClientKeyExchange::from_try(tcp_pkt.payload()) {
+                        Ok(_cke) => {
+                            self.cache.update_primer_complete(&flow);
+                            self.tracked_flows.remove(&flow);
                         }
-
-                        // insert primer
-                        self.cache.add_primer(&flow, primer);
-
-                        // insert size of session ticket, if any
-                        fp.ticket_size.map(|size| self.cache.add_ticket_size(fp_id as i64, size));
-
-                        // insert current fingerprint and measurement
-                        self.cache.add_connection(&flow, fp_id as i64,
-                                                  fp.sni.to_vec(), curr_time.to_timespec().sec);
-                        self.cache.add_fingerprint(fp_id as i64, fp);
-
-                        curr_time.tm_nsec = 0; // privacy
-                        curr_time.tm_sec = 0;
-                        curr_time.tm_min = 0;
-                        self.cache.add_measurement(fp_id as i64, curr_time.to_timespec().sec as i32);
+                        // If not Client Key Exchange, try TLS Alert
+                        Err(err) => {
+                            match TlsAlert::from_try(tcp_pkt.payload()) {
+                                Ok(alert) => {
+                                    self.cache.update_primer_with_alert(&flow, alert.description);
+                                    if alert.level == TlsAlertLevel::Fatal {
+                                        self.cache.update_primer_complete(&flow);
+                                        self.tracked_flows.remove(&flow);
+                                    }
+                                }
+                                // If not TLS Alert, send original error message
+                                Err(_err) => {println!("err: {:?}", err)}
+                            }
+                        }
                     }
                 }
-                Err(err) => {
-                    self.stats.store_clienthello_error(err);
-                }
-            }
-            match ApplicationData::from_try(tcp_pkt.payload()) {
-                Ok(_) => {
-                    self.tracked_flows.remove(&flow);
-                }
-                Err(err) => {println!("err: {:?}", err)}
-            }
-            match ClientKeyExchange::from_try(tcp_pkt.payload()) {
-                Ok(cke) => {
-                    println!("Primer: {{Alert: false}}");
-                    self.cache.update_primer_complete(&flow);
-                    self.tracked_flows.remove(&flow);
-                }
-                Err(err) => {println!("err: {:?}", err)}
-            }
-            match TlsAlert::from_try(tcp_pkt.payload()) {
-                Ok(alert) => {
-                    self.cache.update_primer_with_alert(&flow, alert.description);
-                    if alert.level == TlsAlertLevel::Fatal {
-                        println!("Primer: {{Alert: true}}");
-                        self.cache.update_primer_complete(&flow);
-                        self.tracked_flows.remove(&flow);
+                // If no Primer exists we start Client Hello
+                TlsHandshakeType::ClientHello => {
+                    match ClientHelloFingerprint::from_try(tcp_pkt.payload()) {
+                        Ok(fp) => {
+                            self.stats.fingerprints_seen += 1;
+                            let fp_id = fp.get_fingerprint();
+
+                            let primer = Primer::new(fp.client_random.clone());
+
+                            self.begin_tracking_server_flow(&flow.reversed_clone(), fp_id as i64);
+
+                            let mut curr_time = time::now();
+
+                            if self.write_to_stdout {
+                                println!("ClientHello: {{ id: {} t: {} {}}}",
+                                         fp_id, curr_time.to_timespec().sec, fp);
+                            }
+
+                            if self.write_to_db {
+                                // once in a while -- flush everything
+                                if curr_time.to_timespec().sec - self.cache.last_flush.to_timespec().sec >
+                                    MEASUREMENT_CACHE_FLUSH {
+                                    self.flush_to_db()
+                                }
+
+                                // insert primer
+                                self.cache.add_primer(&flow, primer);
+
+                                // insert size of session ticket, if any
+                                fp.ticket_size.map(|size| self.cache.add_ticket_size(fp_id as i64, size));
+
+                                // insert current fingerprint and measurement
+                                self.cache.add_connection(&flow, fp_id as i64,
+                                                          fp.sni.to_vec(), curr_time.to_timespec().sec);
+                                self.cache.add_fingerprint(fp_id as i64, fp);
+
+                                curr_time.tm_nsec = 0; // privacy
+                                curr_time.tm_sec = 0;
+                                curr_time.tm_min = 0;
+                                self.cache.add_measurement(fp_id as i64, curr_time.to_timespec().sec as i32);
+                            }
+                        }
+                        Err(err) => {
+                            self.stats.store_clienthello_error(err);
+                        }
                     }
                 }
-                Err(err) => {println!("err: {:?}", err)}
+
+                // As a client, we should never see these types
+                TlsHandshakeType::Certificate | TlsHandshakeType::ServerHelloDone => {
+                    self.tracked_flows.remove(&flow);
+                    println!("err: {:?}", ParseError::MissedServerResponse);
+                }
+
+                // Waiting for Server Hello. Do nothing
+                TlsHandshakeType::ServerHello => {}
+
+                // Any other types we'll remove the flow
+                _ => {
+                    self.tracked_flows.remove(&flow);
+                }
             }
             return;
         }
@@ -264,7 +280,7 @@ impl FlowTracker {
                                 // self.cache.add_sfingerprint(sid, fp);
                                 // self.cache.add_smeasurement(cid, sid);
                                 // self.cache.update_connection_with_sid(&flow.reversed_clone(), sid);
-                                self.cache.update_primer_with_cs_sr(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
+                                self.cache.update_primer_server_hello(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
                             }
                         }
                         None => {}
@@ -274,7 +290,7 @@ impl FlowTracker {
                         Some(ref cert) => {
                             println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
                             // replace flow with new overflow one
-                            self.cache.update_primer_with_pub(&flow.reversed_clone(), cert.public_key().unwrap().public_key_to_der().unwrap());
+                            self.cache.update_primer_certificate(&flow.reversed_clone(), cert.public_key().unwrap().public_key_to_der().unwrap());
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
                             self.tracked_server_flows.insert(flow, cid);
                         }
@@ -285,7 +301,7 @@ impl FlowTracker {
                     match fp.get_server_key_exchange() {
                         Some(ske) => {
                             println!("server key exchange: {}", ske);
-                            self.cache.update_primer_with_sp(&flow.reversed_clone(), ske.server_params.clone());
+                            self.cache.update_primer_ske(&flow.reversed_clone(), ske.server_params.clone());
                             self.tracked_server_flows.remove(&flow);
                         }
 
@@ -487,7 +503,7 @@ impl FlowTracker {
                 }
             }
 
-            for (k, primer) in pcache {
+            for (_k, primer) in pcache {
                 let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.client_random),
                     &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key)]);
                 if updated_rows.is_err() {

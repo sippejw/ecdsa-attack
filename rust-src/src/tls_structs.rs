@@ -68,7 +68,7 @@ pub enum TlsAlertMessage {
 
 enum_from_primitive! {
 #[repr(u8)]
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum TlsHandshakeType {
     HelloRequest       = 0,
 	ClientHello        = 1,
@@ -677,7 +677,8 @@ pub struct Primer {
     pub cipher_suite: u16,
     pub alert_message: TlsAlertMessage,
     pub is_complete: bool,
-    pub start_time: i64
+    pub start_time: i64,
+    pub next_state: TlsHandshakeType,
 }
 
 impl Primer {
@@ -691,6 +692,7 @@ impl Primer {
             alert_message: TlsAlertMessage::CloseNotify,
             is_complete: false,
             start_time: time::now().to_timespec().sec,
+            next_state: TlsHandshakeType::ServerHello,
         }
     }
 }
@@ -992,32 +994,6 @@ impl fmt::Display for ClientHelloFingerprint {
                self.alpn.as_slice().as_hex(),
                String::from_utf8_lossy(self.sni.clone().as_slice()),
         )
-    }
-}
-
-pub struct ApplicationData {
-    pub length: u16
-}
-pub type ApplicationDataParseResult = Result<ApplicationData, ParseError>;
-impl ApplicationData {
-    pub fn from_try(a: &[u8]) -> ApplicationDataParseResult {
-        let record_type = a[0];
-        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::ApplicationData) {
-            return Err(ParseError::NotApplicationData)
-        }
-        let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
-            Some(tls_version) => tls_version,
-            None => return Err(ParseError::UnknownRecordTLSVersion)
-        };
-
-        let record_length = u8_to_u16_be(a[3], a[4]);
-        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-            return Err(ParseError::ShortOuterRecord);
-        }
-        let ad = ApplicationData {
-            length: record_length,
-        };
-        Ok(ad)
     }
 }
 
