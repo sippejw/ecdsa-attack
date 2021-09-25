@@ -52,8 +52,8 @@ pub fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, ParseError> {
 }
 
 pub fn find_server_hello(a: &[u8], fl: &mut Flow) -> ServerHelloParseResult {
-    let of = fl.overflow + 1;
-    if a.len() < of {
+    let of = fl.overflow;
+    if a.len() - 1 < of {
         return Err(ParseError::ShortBuffer);  // TODO: BUFF OVERFLOW ERROR HAPPENING HERE
     }
 
@@ -157,8 +157,8 @@ pub fn find_server_hello(a: &[u8], fl: &mut Flow) -> ServerHelloParseResult {
 }
 
 pub fn find_certificate(a: &[u8], fl: &mut Flow) -> ServerCertificateParseResult {
-    let of = fl.overflow + 1;
-    if a.len() < of {
+    let of = fl.overflow;
+    if a.len() - 1 < of {
         return Err(ParseError::ShortBuffer);
     }
 
@@ -202,7 +202,7 @@ pub fn find_certificate(a: &[u8], fl: &mut Flow) -> ServerCertificateParseResult
 
 pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangeParseResult {
     let mut of = fl.overflow;
-    if a.len() < of {
+    if a.len() - 1 < of {
         return Err(ParseError::ShortBuffer);
     }
 

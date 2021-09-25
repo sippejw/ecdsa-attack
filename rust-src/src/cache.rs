@@ -265,21 +265,28 @@ impl MeasurementCache {
         mem::replace(&mut self.sfingerprints_new, HashMap::new())
     }
 
-    // Confirms Primer is complete
-    // Returns cached HashMap of primers, empties it into object
+    // Confirms primers is complete
+    // Returns cached HashMap of primers to be added to db
+    // Removes stale and ready primers
     pub fn flush_primers(&mut self) -> HashMap<Flow, Primer> {
         self.last_flush = time::now();
-        let mut primers_new = HashMap::new();
+        let mut primers_ready = HashMap::new();
+        let mut stale_primer_flows = HashSet::new();
+        let curr_time = time::now().to_timespec().sec;
         for (flow, primer) in self.primers_new.iter() {
-            if primer.is_complete {
+            if primer.is_complete == true {
                 self.primers_flushed.insert(*flow);
+                primers_ready.insert(*flow, primer.clone());
+                stale_primer_flows.insert(*flow);
             }
-            // If primer is less than a minute old add it to new hash map
-            else if primer.start_time - time::now().to_timespec().sec < MEASUREMENT_CACHE_FLUSH {
-                primers_new.insert(*flow, primer.clone());
+            else if curr_time - primer.start_time > MEASUREMENT_CACHE_FLUSH {
+                stale_primer_flows.insert(*flow);
             }
         }
-        mem::replace(&mut self.primers_new, primers_new)
+        for flow in stale_primer_flows {
+            self.primers_new.remove(&flow);
+        }
+        return primers_ready;
     }
 
     fn get_ipv4connections_to_flush(&self) -> HashSet<Flow> {

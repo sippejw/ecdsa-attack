@@ -157,7 +157,6 @@ impl FlowTracker {
         if is_client && self.tracked_flows.contains(&flow) {
             self.stats.fingerprint_checks += 1;
             let next_state = self.cache.get_primer_state(&flow);
-            println!("state: {:?}", next_state);
             match next_state {
                 TlsHandshakeType::ClientKeyExchange => {
                     match ClientKeyExchange::from_try(tcp_pkt.payload()) {
@@ -229,19 +228,8 @@ impl FlowTracker {
                     }
                 }
 
-                // As a client, we should never see these types
-                TlsHandshakeType::Certificate | TlsHandshakeType::ServerHelloDone => {
-                    self.tracked_flows.remove(&flow);
-                    println!("err: {:?}", ParseError::MissedServerResponse);
-                }
-
-                // Waiting for Server Hello. Do nothing
-                TlsHandshakeType::ServerHello => {}
-
-                // Any other types we'll remove the flow
-                _ => {
-                    self.tracked_flows.remove(&flow);
-                }
+                // Any other types we'll defer. Cache will clear stale primers
+                _ => {}
             }
             return;
         }
