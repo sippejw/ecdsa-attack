@@ -6,8 +6,8 @@ use self::openssl::x509::X509;
 
 use common::{Flow, ParseError, u8_to_u16_be, u8_to_u32_be};
 use tls_structs::{CipherSuite, HasSignature, ServerCertificateParseResult, ServerHello, ServerHelloParseResult, 
-    ServerKeyExchange, ServerKeyExchangeParseResult, ServerParseResult, ServerReturn, TlsHandshakeType, TlsRecordType, 
-    TlsVersion};
+    ServerKeyExchange, ServerKeyExchangeParseResult, ServerParseResult, ServerCertificateStatusParseResult, ServerReturn, TlsHandshakeType, TlsRecordType,
+    TlsVersion, ServerCertificateStatus};
 
 
 
@@ -166,18 +166,20 @@ pub fn find_certificate(a: &[u8], fl: &mut Flow) -> ServerCertificateParseResult
     if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
     }
-
+    let mut offset: usize = 1;
     let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
         Some(tls_version) => tls_version,
         None => return Err(ParseError::UnknownRecordTLSVersion),
     };
+    offset += 2;
 
     let record_length = u8_to_u16_be(a[of+3], a[of+4]);
     if usize::from_u16(record_length).unwrap() > a[of..].len() - 5 {
         // have an overflow of certs between packets
         fl.overflow = record_length as usize - a[of+5..].len();
     }
-
+    offset += 2;
+    offset += record_length as usize;
     if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::Certificate) {
         return Err(ParseError::NotACertificate);
     }
@@ -192,12 +194,52 @@ pub fn find_certificate(a: &[u8], fl: &mut Flow) -> ServerCertificateParseResult
         return Err(ParseError::NotFullCertificate);
     }
 
+    fl.overflow = of + offset;
     // we have a full certificate here
 
     match X509::from_der(&a[of+15..of+15+cert_len]) {
         Ok(cert) => Ok(cert),
         Err(_) => Err(ParseError::NotACertificate),
     }
+}
+
+pub fn find_certificate_status(a: &[u8], fl: &mut Flow) -> ServerCertificateStatusParseResult {
+    let mut of = fl.overflow;
+    if a.len() - 1 < of {
+        return Err(ParseError::ShortBuffer);
+    }
+    let record_type = a[of];
+    if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+        return Err(ParseError::NotAHandshake);
+    }
+    let mut offset: usize = 1;
+
+    let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
+        Some(tls_version) => tls_version,
+        None => return Err(ParseError::UnknownRecordTLSVersion),
+    };
+    offset += 2;
+
+    let record_length = u8_to_u16_be(a[of+3], a[of+4]);
+    if usize::from_u16(record_length).unwrap() > a[of..].len() - 5 {
+        // have an overflow of certs between packets
+        fl.overflow = record_length as usize - a[of+5..].len();
+    }
+    offset += 2;
+    offset += record_length as usize;
+
+    if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::CertificateStatus) {
+        return Err(ParseError::NoCertificateStatus);
+    }
+    fl.overflow = of + offset;
+
+    let status_type = a[of+9];
+
+    let status = ServerCertificateStatus {
+        certificate_status_type: status_type,
+    };
+
+    Ok(status)
 }
 
 pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangeParseResult {
@@ -286,6 +328,7 @@ pub fn from_try(a: &[u8], fl: &mut Flow) -> ServerParseResult {
     let mut sr = ServerReturn {
         server_hello: None,
         cert: None,
+        cert_status: None,
         server_key_exchange: None,
     };
 
@@ -304,6 +347,13 @@ pub fn from_try(a: &[u8], fl: &mut Flow) -> ServerParseResult {
             sr.cert = enum_primitive::Option::Some(cert);
         }
         Err(_) => {} // didn't find a certificate
+    }
+
+    match find_certificate_status(a, fl) {
+        Ok(status) => {
+            sr.cert_status = enum_primitive::Option::Some(status);
+        }
+        Err(_) => {} // didn't find a certificate status
     }
 
     match find_server_key_exchange(a, fl) {

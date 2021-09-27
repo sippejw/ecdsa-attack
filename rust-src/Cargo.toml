@@ -1,11 +1,11 @@
 [package]
-name = "tls_fingerprint"
+name = "rsa-faulty-signatures"
 version = "0.1.0"
 authors = ["Sergey Frolov <sergey.frolov@colorado.edu>"]
 include = ["src/*"]
 
 [lib]
-name ="tls_fingerprint"
+name ="rsa_faulty_signatures"
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]

@@ -5,11 +5,8 @@ use common::{ParseError};
 
 pub struct StatsTracker {
     pub last_print: time::Tm,
-    pub fingerprints_seen: u64,
-    pub fingerprint_checks: u64,
-
-    pub sfingerprints_seen: u64,
-    pub sfingerprint_checks: u64,
+    pub primers_created: u64,
+    pub primers_completed: u64,
 
     pub all_packets_total: u64,
     pub bad_checksums: u64,
@@ -26,10 +23,8 @@ impl StatsTracker {
     pub fn new() -> StatsTracker {
         StatsTracker {
             last_print: time::now(),
-            fingerprints_seen: 0,
-            fingerprint_checks: 0,
-            sfingerprints_seen: 0,
-            sfingerprint_checks: 0,
+            primers_created: 0,
+            primers_completed: 0,
             all_packets_total: 0,
             bad_checksums: 0,
             bytes_processed: 0,
@@ -60,32 +55,27 @@ impl StatsTracker {
         const BYTES_TO_GBPS: f64 = (1000 * 1000 * 1000 / 8) as f64;
 
         let _percent_misparsed;
-        if self.fingerprint_checks != 0 {
-            _percent_misparsed = self.client_hello_misparsed as f64 / self.fingerprint_checks as f64;
+        if self.primers_created != 0 {
+            _percent_misparsed = self.client_hello_misparsed as f64 / self.primers_created as f64;
         } else {
             _percent_misparsed = 0 as f64;
         }
 
-        println!("[STATS] fingerprints: found {:.2} with {:.2} checks; \
-         not a CH: {:.2} misparsed CH: {:.2} misparsed extention: {:2}; \
-         sfingerprints: found {:.2} with {:.2} checks; \
+        println!("[STATS] primers: found {:.2} with {:.2} completed; \
+         not a CH: {:.2} misparsed CH: {:.2} misparsed extension: {:2}; \
          packets: {:.2} (bad_checksums: {:.2}); Gbps: {:.4}",
-                 self.fingerprints_seen as f64 / diff_float,
-                 self.fingerprint_checks as f64 / diff_float,
+                 self.primers_created as f64 / diff_float,
+                 self.primers_completed as f64 / diff_float,
                  self.not_a_clienthello as f64 / diff_float,
                  self.client_hello_misparsed as f64 / diff_float,
                  self.extension_misparsed as f64 / diff_float,
-                 self.sfingerprints_seen as f64 / diff_float,
-                 self.sfingerprint_checks as f64 / diff_float,
                  self.all_packets_total as f64 / diff_float,
                  self.bad_checksums as f64 / diff_float,
                  self.bytes_processed as f64 / (BYTES_TO_GBPS * diff_float),
         );
 
-        self.fingerprints_seen = 0;
-        self.fingerprint_checks = 0;
-        self.sfingerprints_seen = 0;
-        self.sfingerprint_checks = 0;
+        self.primers_created = 0;
+        self.primers_completed = 0;
         self.all_packets_total = 0;
         self.bad_checksums = 0;
         self.bytes_processed = 0;
@@ -142,7 +132,7 @@ impl StatsTracker {
             ParseError::NotAServerHello => {
                 panic!("Got NotAServerHello error from parsing ClientHello")
             }
-            ParseError::NotACertificate | ParseError::NotFullCertificate => {
+            ParseError::NotACertificate | ParseError::NotFullCertificate | ParseError::NoCertificateStatus => {
                 panic!("Got NotACertificate error from parsing ClientHello")
             }
             ParseError::NoServerKeyExchange => {

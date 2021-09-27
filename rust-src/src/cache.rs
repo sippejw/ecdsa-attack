@@ -4,6 +4,7 @@ use std::collections::{HashSet, HashMap};
 use common::{Flow, ConnectionIPv6, ConnectionIPv4, u8_to_u16_be, u8_to_u32_be, u8array_to_u32_be};
 use std::net::IpAddr;
 use tls_structs::{CipherSuite, Primer, TlsAlertMessage, TlsHandshakeType};
+use stats_tracker::StatsTracker;
 
 // to ease load on db, cache queries
 pub struct MeasurementCache {
@@ -58,6 +59,7 @@ impl MeasurementCache {
     {
         match self.primers_new.get_mut(&flow) {
             Some(mut primer) => {
+                println!("Adding public key");
                 primer.pub_key = pub_key;
                 primer.next_state = TlsHandshakeType::ServerKeyExchange;
             } ,
@@ -65,11 +67,13 @@ impl MeasurementCache {
         }
     }
 
-    pub fn update_primer_ske(&mut self, flow: &Flow, sp: Vec<u8>)
+    pub fn update_primer_ske(&mut self, flow: &Flow, sp: Vec<u8>, sig: Option<Vec<u8>>)
     {
         match self.primers_new.get_mut(&flow) {
             Some(mut primer) => {
+                println!("Add server params");
                 primer.server_params = sp;
+                primer.signature = sig;
                 primer.next_state = TlsHandshakeType::ClientKeyExchange;
             },
             _ => {}
@@ -92,11 +96,14 @@ impl MeasurementCache {
         }
     }
 
-    pub fn update_primer_complete(&mut self, flow: &Flow)
+    pub fn update_primer_complete(&mut self, flow: &Flow) -> bool
     {
         match self.primers_new.get_mut(&flow) {
-            Some(mut primer) => primer.is_complete = true,
-            _ => {}
+            Some(mut primer) => {
+                primer.is_complete = true;
+                return true;
+            },
+            _ => return false
         }
     }
 

@@ -160,7 +160,9 @@ impl FlowTracker {
                 TlsHandshakeType::ClientKeyExchange => {
                     match ClientKeyExchange::from_try(tcp_pkt.payload()) {
                         Ok(_cke) => {
-                            self.cache.update_primer_complete(&flow);
+                            if self.cache.update_primer_complete(&flow) {
+                                self.stats.primers_completed += 1;
+                            }
                             self.tracked_flows.remove(&flow);
                         }
                         // If not Client Key Exchange, try TLS Alert
@@ -169,7 +171,9 @@ impl FlowTracker {
                                 Ok(alert) => {
                                     self.cache.update_primer_with_alert(&flow, alert.description);
                                     if alert.level == TlsAlertLevel::Fatal {
-                                        self.cache.update_primer_complete(&flow);
+                                        if self.cache.update_primer_complete(&flow) {
+                                            self.stats.primers_completed += 1;
+                                        }
                                         self.tracked_flows.remove(&flow);
                                     }
                                 }
@@ -183,6 +187,7 @@ impl FlowTracker {
                 TlsHandshakeType::ClientHello => {
                     match ClientHello::from_try(tcp_pkt.payload()) {
                         Ok(fp) => {
+                            self.stats.primers_created += 1;
 
                             let primer = Primer::new(fp.client_random.clone());
 
@@ -233,16 +238,14 @@ impl FlowTracker {
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
                             self.tracked_server_flows.insert(flow, cid);
 
-                            if self.write_to_db {
-                                self.cache.update_primer_server_hello(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
-                            }
+                            self.cache.update_primer_server_hello(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
                         }
                         None => {}
                     }
 
                     match fp.get_certificate() {
                         Some(ref cert) => {
-                            println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
+                            // println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
                             // println!("Sig alg: {:02x?}", cert.signature_algorithm());
                             // replace flow with new overflow one
                             self.cache.update_primer_certificate(&flow.reversed_clone(), cert.public_key().unwrap().public_key_to_der().unwrap());
@@ -256,7 +259,7 @@ impl FlowTracker {
                     match fp.get_server_key_exchange() {
                         Some(ske) => {
                             println!("server key exchange: {}", ske);
-                            self.cache.update_primer_ske(&flow.reversed_clone(), ske.server_params.clone());
+                            self.cache.update_primer_ske(&flow.reversed_clone(), ske.server_params.clone(), ske.signature.clone());
                             self.tracked_server_flows.remove(&flow);
                         }
 
@@ -313,8 +316,9 @@ impl FlowTracker {
                     server_params,
                     cipher_suite,
                     tls_alert,
-                    pub_key)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    pub_key,
+                    signature)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT DO NOTHING;"
             )
             {
@@ -327,7 +331,7 @@ impl FlowTracker {
 
             for (_k, primer) in pcache {
                 let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.id as i64), &(primer.client_random),
-                    &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key)]);
+                    &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key), &(primer.signature)]);
                 if updated_rows.is_err() {
                     println!("Error updating primers: {:?}", updated_rows)
                 }

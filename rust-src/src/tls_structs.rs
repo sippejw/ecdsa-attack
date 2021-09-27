@@ -678,6 +678,7 @@ pub struct Primer {
     pub alert_message: TlsAlertMessage,
     pub is_complete: bool,
     pub start_time: i64,
+    pub signature: Option<Vec<u8>>,
     pub next_state: TlsHandshakeType,
 }
 
@@ -700,6 +701,7 @@ impl Primer {
             alert_message: TlsAlertMessage::CloseNotify,
             is_complete: false,
             start_time: curr_time,
+            signature: Some(Vec::new()),
             next_state: TlsHandshakeType::ServerHello,
         }
     }
@@ -1036,6 +1038,11 @@ impl TlsAlert {
 }
 
 #[derive(Debug, PartialEq, Default)]
+pub struct ServerCertificateStatus {
+    pub certificate_status_type: u8,
+}
+
+#[derive(Debug, PartialEq, Default)]
 pub struct ServerHello {
     pub record_tls_version: TlsVersion,
     pub sh_tls_version: TlsVersion,
@@ -1109,6 +1116,7 @@ pub trait ServerHelloAccessors {
 pub struct ServerReturn {
     pub server_hello: Option<ServerHello>,
     pub cert: Option<openssl::x509::X509>,
+    pub cert_status: Option<ServerCertificateStatus>,
     pub server_key_exchange: Option<ServerKeyExchange>,
 }
 
@@ -1346,7 +1354,9 @@ impl ServerHelloAccessors for ServerReturn {
 pub type ServerParseResult = Result<ServerReturn, ParseError>;
 pub type ServerHelloParseResult = Result<ServerHello, ParseError>;
 pub type ServerCertificateParseResult = Result<X509, ParseError>;
+pub type ServerCertificateStatusParseResult = Result<ServerCertificateStatus, ParseError>;
 pub type ServerKeyExchangeParseResult = Result<ServerKeyExchange, ParseError>;
+
 
 impl ServerReturn {
     pub fn get_server_hello(&self) -> Option<&ServerHello> {

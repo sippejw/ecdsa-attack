@@ -43,6 +43,7 @@ pub enum ParseError {
 
     NotACertificate,
     NotFullCertificate,
+    NoCertificateStatus,
 
     NoServerKeyExchange,
     UnImplementedCurveType,
