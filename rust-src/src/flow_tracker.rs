@@ -16,10 +16,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
-use common::{TimedFlow, Flow, ParseError};
+use common::{TimedFlow, Flow};
 use stats_tracker::StatsTracker;
 use tls_parser;
-use tls_structs::{CipherSuite, ClientHelloFingerprint, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, TlsHandshakeType};
+use tls_structs::{CipherSuite, ClientHello, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, TlsHandshakeType};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -155,7 +155,6 @@ impl FlowTracker {
 
         // check for ClientHello
         if is_client && self.tracked_flows.contains(&flow) {
-            self.stats.fingerprint_checks += 1;
             let next_state = self.cache.get_primer_state(&flow);
             match next_state {
                 TlsHandshakeType::ClientKeyExchange => {
@@ -182,44 +181,26 @@ impl FlowTracker {
                 }
                 // If no Primer exists we start Client Hello
                 TlsHandshakeType::ClientHello => {
-                    match ClientHelloFingerprint::from_try(tcp_pkt.payload()) {
+                    match ClientHello::from_try(tcp_pkt.payload()) {
                         Ok(fp) => {
-                            self.stats.fingerprints_seen += 1;
-                            let fp_id = fp.get_fingerprint();
 
                             let primer = Primer::new(fp.client_random.clone());
 
-                            self.begin_tracking_server_flow(&flow.reversed_clone(), fp_id as i64);
+                            self.begin_tracking_server_flow(&flow.reversed_clone(), primer.id as i64);
 
-                            let mut curr_time = time::now();
+                            let curr_time = time::now();
+                            // insert current fingerprint and measurement
+                            self.cache.add_connection(&flow, primer.id as i64,
+                                fp.sni.to_vec(), curr_time.to_timespec().sec);
 
-                            if self.write_to_stdout {
-                                println!("ClientHello: {{ id: {} t: {} {}}}",
-                                         fp_id, curr_time.to_timespec().sec, fp);
-                            }
-
+                            // insert primer
+                            self.cache.add_primer(&flow, primer);
                             if self.write_to_db {
                                 // once in a while -- flush everything
                                 if curr_time.to_timespec().sec - self.cache.last_flush.to_timespec().sec >
                                     MEASUREMENT_CACHE_FLUSH {
                                     self.flush_to_db()
                                 }
-
-                                // insert primer
-                                self.cache.add_primer(&flow, primer);
-
-                                // insert size of session ticket, if any
-                                fp.ticket_size.map(|size| self.cache.add_ticket_size(fp_id as i64, size));
-
-                                // insert current fingerprint and measurement
-                                self.cache.add_connection(&flow, fp_id as i64,
-                                                          fp.sni.to_vec(), curr_time.to_timespec().sec);
-                                self.cache.add_fingerprint(fp_id as i64, fp);
-
-                                curr_time.tm_nsec = 0; // privacy
-                                curr_time.tm_sec = 0;
-                                curr_time.tm_min = 0;
-                                self.cache.add_measurement(fp_id as i64, curr_time.to_timespec().sec as i32);
                             }
                         }
                         Err(err) => {
@@ -243,7 +224,7 @@ impl FlowTracker {
                     break;
                 }
             }
-            self.stats.sfingerprint_checks += 1;
+
             match tls_parser::from_try(tcp_pkt.payload(), &mut flow) {
                 Ok(fp) => {
                     match fp.get_server_hello() {
@@ -252,22 +233,7 @@ impl FlowTracker {
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
                             self.tracked_server_flows.insert(flow, cid);
 
-                            self.stats.sfingerprints_seen += 1;
-                            let sid = sh.get_fingerprint() as i64;
-                            // let cid = self.tracked_server_flows[&flow];
-
-                            if self.write_to_stdout {
-                                println!("ServerHello: {{ sid: {} cid: {} sh: {}}}",
-                                        sid, cid, sh);
-                                println!("Primer: {{Server Random: {:?}}}",
-                                        sh.server_random);
-                            }
-
-                            // need to re-write this to handle that fp is now a general return
                             if self.write_to_db {
-                                // self.cache.add_sfingerprint(sid, fp);
-                                // self.cache.add_smeasurement(cid, sid);
-                                // self.cache.update_connection_with_sid(&flow.reversed_clone(), sid);
                                 self.cache.update_primer_server_hello(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
                             }
                         }
@@ -277,6 +243,7 @@ impl FlowTracker {
                     match fp.get_certificate() {
                         Some(ref cert) => {
                             println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
+                            // println!("Sig alg: {:02x?}", cert.signature_algorithm());
                             // replace flow with new overflow one
                             self.cache.update_primer_certificate(&flow.reversed_clone(), cert.public_key().unwrap().public_key_to_der().unwrap());
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
@@ -302,96 +269,14 @@ impl FlowTracker {
     }
 
     fn flush_to_db(&mut self) {
-        let client_mcache = self.cache.flush_measurements();
-        let client_fcache = self.cache.flush_fingerprints();
-        let server_mcache = self.cache.flush_smeasurements();
-        let server_fcache = self.cache.flush_sfingerprints();
         let pcache = self.cache.flush_primers();
         let c4cache = self.cache.flush_ipv4connections();
         let c6cache = self.cache.flush_ipv6connections();
-        let ticket_sizes = self.cache.flush_ticket_sizes();
 
         let dsn = self.dsn.clone().unwrap();
         thread::spawn(move || {
             let inserter_thread_start = time::now();
             let mut thread_db_conn = Client::connect(&dsn, NoTls).unwrap();
-
-            let insert_fingerprint = match thread_db_conn.prepare(
-                "INSERT
-                INTO fingerprints (
-                    id,
-                    record_tls_version,
-                    ch_tls_version,
-                    cipher_suites,
-                    compression_methods,
-                    extensions,
-                    named_groups,
-                    ec_point_fmt,
-                    sig_algs,
-                    alpn,
-                    key_share,
-                    psk_key_exchange_modes,
-                    supported_versions,
-                    cert_compression_algs,
-                    record_size_limit)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                ON CONFLICT (id) DO NOTHING;")
-            {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    println!("Preparing insert_fingerprint failed: {}", e);
-                    return;
-                }
-            };
-
-            let insert_measurement = match thread_db_conn.prepare(
-                "INSERT
-                INTO measurements (unixtime, id, count)
-                VALUES ($1, $2, $3)
-                ON CONFLICT ON CONSTRAINT measurements_pkey1 DO UPDATE
-                SET count = measurements.count + $4;")
-            {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    println!("Preparing insert_measurement failed: {}", e);
-                    return;
-                }
-            };
-
-            let insert_sfingerprint = match thread_db_conn.prepare(
-                "INSERT
-                INTO sfingerprints (id,
-                    record_tls_version,
-                    sh_tls_version,
-                    cipher_suite,
-                    compression_method,
-                    extensions,
-                    eliptic_curves,
-                    ec_point_fmt,
-                    alpn)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (id) DO NOTHING;")
-            {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    println!("Preparing insert_sfingerprint failed: {}", e);
-                    return;
-                }
-            };
-
-            let insert_smeasurement = match thread_db_conn.prepare(
-                "INSERT
-                INTO smeasurements (cid, sid, count)
-                VALUES ($1, $2, $3)
-                ON CONFLICT ON CONSTRAINT smeasurements_pkey DO UPDATE
-                SET count = smeasurements.count + $4;")
-            {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    println!("Preparing insert_smeasurement failed: {}", e);
-                    return;
-                }
-            };
 
             let insert_ipv4conn = match thread_db_conn.prepare(
                 "INSERT
@@ -419,30 +304,17 @@ impl FlowTracker {
                 }
             };
 
-            let insert_ticket_size = match thread_db_conn.prepare(
-                "INSERT
-                INTO ticket_sizes (id, size, count)
-                VALUES ($1, $2, $3)
-                ON CONFLICT ON CONSTRAINT ticket_sizes_pkey DO UPDATE
-                SET count = ticket_sizes.count + $4;")
-            {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    println!("Preparing insert_ticket_size failed: {}", e);
-                    return;
-                }
-            };
-
             let insert_primer = match thread_db_conn.prepare(
                 "INSERT
                 INTO primers (
+                    id,
                     client_random,
                     server_random,
                     server_params,
                     cipher_suite,
                     tls_alert,
                     pub_key)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT DO NOTHING;"
             )
             {
@@ -453,46 +325,8 @@ impl FlowTracker {
                 }
             };
 
-            for (fp_id, fp) in client_fcache {
-                let updated_rows = thread_db_conn.execute(&insert_fingerprint, &[&(fp_id as i64),
-                &(fp.record_tls_version as i16), &(fp.ch_tls_version as i16),
-                &fp.cipher_suites, &fp.compression_methods, &fp.extensions,
-                &fp.named_groups, &fp.ec_point_fmt, &fp.sig_algs, &fp.alpn,
-                &fp.key_share, &fp.psk_key_exchange_modes, &fp.supported_versions,
-                &fp.cert_compression_algs, &fp.record_size_limit,]);
-                if updated_rows.is_err() {
-                    println!("Error updating fingerprints: {:?}", updated_rows);
-                }
-            }
-
-            for (k, count) in client_mcache {
-                let updated_rows = thread_db_conn.execute(&insert_measurement, &[&(k.1), &(k.0),
-                    &(count), &(count)]);
-                if updated_rows.is_err() {
-                    println!("Error updating measurements: {:?}", updated_rows);
-                }
-            }
-
-            for (sid, fp) in server_fcache {
-                let updated_rows = thread_db_conn.execute(&insert_sfingerprint, &[&(sid as i64),
-                    &(fp.record_tls_version as i16), &(fp.sh_tls_version as i16),
-                    &(fp.cipher_suite as i16), &(fp.compression_method as i8), &fp.extensions,
-                    &fp.elliptic_curves, &fp.ec_point_fmt, &fp.alpn]);
-                if updated_rows.is_err() {
-                    println!("Error updating sfingerprints: {:?}", updated_rows);
-                }
-            }
-
-            for (k, count) in server_mcache {
-                let updated_rows = thread_db_conn.execute(&insert_smeasurement, &[&(k.0), &(k.1),
-                    &(count), &(count)]);
-                if updated_rows.is_err() {
-                    println!("Error updating smeasurements: {:?}", updated_rows);
-                }
-            }
-
             for (_k, primer) in pcache {
-                let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.client_random),
+                let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.id as i64), &(primer.client_random),
                     &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key)]);
                 if updated_rows.is_err() {
                     println!("Error updating primers: {:?}", updated_rows)
@@ -512,14 +346,6 @@ impl FlowTracker {
                     &(ipv6c.anon_cli_ip), &(ipv6c.serv_ip), &(ipv6c.sni)]);
                 if updated_rows.is_err() {
                     println!("Error updating ipv6connections: {:?}", updated_rows);
-                }
-            }
-
-            for (k, count) in ticket_sizes {
-                let updated_rows = thread_db_conn.execute(&insert_ticket_size, &[&(k.0 as i64),
-                    &(k.1 as i16), &(count), &(count)]);
-                if updated_rows.is_err() {
-                    println!("Error updating ticket sizes: {:?}", updated_rows);
                 }
             }
 

@@ -127,10 +127,11 @@ pub struct ConnectionIPv4 {
     pub sni: Vec<u8>,
 }
 
-
-// TODO: better done as a trait on Digest
-pub fn hash_u32<D: Digest>(h: &mut D, n: u32) {
-    h.input(&[((n >> 24) & 0xff) as u8,
+pub fn hash_u64<D: Digest>(h: &mut D, n: u64) {
+    h.input(&[((n >> 56) & 0xff) as u8,
+        ((n >> 48) & 0xff) as u8,
+        ((n >> 32) & 0xff) as u8,
+        ((n >> 24) & 0xff) as u8,
         ((n >> 16) & 0xff) as u8,
         ((n >> 8) & 0xff) as u8,
         (n & 0xff) as u8]);

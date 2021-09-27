@@ -1,31 +1,19 @@
 extern crate time;
 
 use std::collections::{HashSet, HashMap};
-use std::mem;
 use common::{Flow, ConnectionIPv6, ConnectionIPv4, u8_to_u16_be, u8_to_u32_be, u8array_to_u32_be};
 use std::net::IpAddr;
-use tls_structs::{CipherSuite, ClientHelloFingerprint, ServerHelloFingerprint, Primer, TlsAlertMessage, TlsHandshakeType};
+use tls_structs::{CipherSuite, Primer, TlsAlertMessage, TlsHandshakeType};
 
 // to ease load on db, cache queries
 pub struct MeasurementCache {
     pub last_flush: time::Tm,
-    // for ClientHello
-    measurements: HashMap<(i64, i32), i32>,
-    // (cid, timestamp): count
-    fingerprints_new: HashMap<i64, ClientHelloFingerprint>,
-    fingerprints_flushed: HashSet<i64>,
-    // for ServerHello
-    smeasurements: HashMap<(i64, i64), i32>,
-    // (cid, sid): count
-    sfingerprints_new: HashMap<i64, ServerHelloFingerprint>,
-    sfingerprints_flushed: HashSet<i64>,
-    // for connections
 
+    // for Primer
     primers_new: HashMap<Flow, Primer>,
     primers_flushed: HashSet<Flow>,
 
-    ticket_sizes: HashMap<(i64, i16), i64>, // (ClientHelloID, ticket_size) -> count
-
+    // for connections
     ipv4_connections_seen: HashSet<(i64, u32)>,
     ipv4_connections: HashMap<Flow, ConnectionIPv4>,
     ipv6_connections: HashMap<Flow, ConnectionIPv6>,
@@ -38,52 +26,13 @@ impl MeasurementCache {
     pub fn new() -> MeasurementCache {
         MeasurementCache {
             last_flush: time::now(),
-            measurements: HashMap::new(),
-            fingerprints_flushed: HashSet::new(),
-            fingerprints_new: HashMap::new(),
-
-            smeasurements: HashMap::new(),
-            sfingerprints_flushed: HashSet::new(),
-            sfingerprints_new: HashMap::new(),
 
             primers_flushed: HashSet::new(),
             primers_new: HashMap::new(),
 
-            ticket_sizes: HashMap::new(),
-
             ipv4_connections_seen: HashSet::new(),
             ipv4_connections: HashMap::new(),
             ipv6_connections: HashMap::new(),
-        }
-    }
-
-    pub fn add_measurement(&mut self, fp_id: i64, ts: i32) {
-        let key = (fp_id, ts);
-        let counter = self.measurements.entry(key).or_insert(0);
-        *counter += 1;
-    }
-
-    pub fn add_fingerprint(&mut self, fp_id: i64, fp: ClientHelloFingerprint) {
-        if !self.fingerprints_flushed.contains(&fp_id) {
-            self.fingerprints_new.insert(fp_id, fp);
-        }
-    }
-
-    pub fn add_smeasurement(&mut self, cid: i64, sid: i64) {
-        let key = (cid, sid);
-        let counter = self.smeasurements.entry(key).or_insert(0);
-        *counter += 1;
-    }
-
-    pub fn add_ticket_size(&mut self, cid: i64, ticket_size: i16) {
-        let key = (cid, ticket_size);
-        let counter = self.ticket_sizes.entry(key).or_insert(0);
-        *counter += 1;
-    }
-
-    pub fn add_sfingerprint(&mut self, sid: i64, fp: ServerHelloFingerprint) {
-        if !self.sfingerprints_flushed.contains(&sid) {
-            self.sfingerprints_new.insert(sid, fp);
         }
     }
 
@@ -202,69 +151,6 @@ impl MeasurementCache {
         }
     }
 
-    pub fn update_connection_with_sid(&mut self, flow: &Flow, sid: i64) {
-        match flow.src_ip {
-            IpAddr::V4(_) => {
-                match flow.dst_ip {
-                    IpAddr::V4(_) => {
-                        match self.ipv4_connections.get_mut(&flow) {
-                            Some(mut conn) => conn.sid = sid,
-                            _ => {}
-                        }
-                    }
-                    IpAddr::V6(_) => {
-                        println!("[WARNING] IP versions mismatch! source(ipv4): {}, destination(ipv6): {}",
-                                 flow.src_ip, flow.dst_ip);
-                    }
-                }
-            }
-            IpAddr::V6(_) => {
-                match flow.dst_ip {
-                    IpAddr::V6(_) => {
-                        match self.ipv6_connections.get_mut(&flow) {
-                            Some(conn) => conn.sid = sid,
-                            _ => {}
-                        }
-                    }
-                    IpAddr::V4(_) => {
-                        println!("[WARNING] IP versions mismatch! source(ipv6): {}, destination(ipv4): {}",
-                                 flow.src_ip, flow.dst_ip);
-                    }
-                }
-            }
-        }
-    }
-
-    // returns cached HashMap of measurements, empties it in object
-    pub fn flush_measurements(&mut self) -> HashMap<(i64, i32), i32> {
-        self.last_flush = time::now();
-        mem::replace(&mut self.measurements, HashMap::new())
-    }
-
-    // returns cached HashMap of fingerprints, empties it in object
-    pub fn flush_fingerprints(&mut self) -> HashMap<i64, ClientHelloFingerprint> {
-        self.last_flush = time::now();
-        for (fp_id, _) in self.fingerprints_new.iter() {
-            self.fingerprints_flushed.insert(*fp_id);
-        }
-        mem::replace(&mut self.fingerprints_new, HashMap::new())
-    }
-
-    // returns cached HashMap of measurements, empties it in object
-    pub fn flush_smeasurements(&mut self) -> HashMap<(i64, i64), i32> {
-        self.last_flush = time::now();
-        mem::replace(&mut self.smeasurements, HashMap::new())
-    }
-
-    // returns cached HashMap of fingerprints, empties it in object
-    pub fn flush_sfingerprints(&mut self) -> HashMap<i64, ServerHelloFingerprint> {
-        self.last_flush = time::now();
-        for (sid, _) in self.sfingerprints_new.iter() {
-            self.sfingerprints_flushed.insert(*sid);
-        }
-        mem::replace(&mut self.sfingerprints_new, HashMap::new())
-    }
-
     // Confirms primers is complete
     // Returns cached HashMap of primers to be added to db
     // Removes stale and ready primers
@@ -329,11 +215,5 @@ impl MeasurementCache {
             hs_conns.insert(self.ipv6_connections.remove(&flow).unwrap());
         }
         hs_conns
-    }
-
-    // returns cached HashMap of ticket sizes, empties it in object
-    pub fn flush_ticket_sizes(&mut self) -> HashMap<(i64, i16), i64> {
-        self.last_flush = time::now();
-        mem::replace(&mut self.ticket_sizes, HashMap::new())
     }
 }

@@ -33,16 +33,17 @@ CFLAGS     =  -O2 -DHAVE_PF_RING -Wall ${INCLUDE} -DENABLE_BPF -D HAVE_PF_RING_Z
 DEBUG_OR_RELEASE = release
 LIBS       =  ${LIBPFRING} ${LIBPCAP} `${PFRINGDIR}/pfring_config --libs` -lpthread -lrt -Lrust-src/target/${DEBUG_OR_RELEASE} -ltls_fingerprint -ldl -lm -lssl -lcrypto
 
-all: tls-fingerprint
+all: rsa-faulty-signatures
 
-tls-fingerprint.o: main.c #${PFUTILSDIR}/pfutils.c
+rsa-faulty-signatures.o: main.c #${PFUTILSDIR}/pfutils.c
 	${CC} ${CFLAGS} -c $< -o $@
 
 rust-code:
 	cd ./rust-src/;	cargo build --${DEBUG_OR_RELEASE}
 
-tls-fingerprint: tls-fingerprint.o ${LIBPFRING} rust-code
+rsa-faulty-signatures: rsa-faulty-signatures.o ${LIBPFRING} rust-code
 		${CC} ${CFLAGS} $< -o $@ ${LIBS}
 
 clean:
-	@rm -f tls-fingerprint *.o *~
+	@rm -f rsa-faulty-signatures *.o *~
+	@rm -rf ./rust-src/target

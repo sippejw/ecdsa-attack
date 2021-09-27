@@ -1,4 +1,4 @@
-# ECDSA Attack
+# RSA Faulty Signatures
 
 ### Rust PFRing integration
 
@@ -118,7 +118,7 @@ Connect the `ecdsa-attack` parser to PF_RING and we're off!
 
 ```sh
 # sudo ./tls-fingerprint -c $CLUSTER_NUM -n $CORES -d $DATA_SOURCE_NAME [-m $QUEUE_OFFSET]
-sudo ./tls-fingerprint -c 10 -n 2 -d "postgresql://user:secret@localhost/dbname" -m 0
+sudo ./rsa-faulty-signatures -c 10 -n 2 -d "postgresql://user:secret@localhost/dbname" -m 0
 ```
 
 **-c** specifies the ZC cluster ID

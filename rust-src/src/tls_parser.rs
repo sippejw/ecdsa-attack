@@ -5,7 +5,7 @@ use self::num::FromPrimitive;
 use self::openssl::x509::X509;
 
 use common::{Flow, ParseError, u8_to_u16_be, u8_to_u32_be};
-use tls_structs::{CipherSuite, HasSignature, ServerCertificateParseResult, ServerHelloFingerprint, ServerHelloParseResult, 
+use tls_structs::{CipherSuite, HasSignature, ServerCertificateParseResult, ServerHello, ServerHelloParseResult, 
     ServerKeyExchange, ServerKeyExchangeParseResult, ServerParseResult, ServerReturn, TlsHandshakeType, TlsRecordType, 
     TlsVersion};
 
@@ -54,10 +54,10 @@ pub fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, ParseError> {
 pub fn find_server_hello(a: &[u8], fl: &mut Flow) -> ServerHelloParseResult {
     let of = fl.overflow;
     if a.len() - 1 < of {
-        return Err(ParseError::ShortBuffer);  // TODO: BUFF OVERFLOW ERROR HAPPENING HERE
+        return Err(ParseError::ShortBuffer);
     }
 
-    let record_type = a[of];  // TODO: BUFF OVERFLOW
+    let record_type = a[of];
     if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
     }
@@ -115,7 +115,7 @@ pub fn find_server_hello(a: &[u8], fl: &mut Flow) -> ServerHelloParseResult {
     offset += 1;
 
 
-    let mut sh = ServerHelloFingerprint {
+    let mut sh = ServerHello {
         record_tls_version: record_tls_version,
         sh_tls_version: sh_tls_version,
         server_random: server_random,
@@ -313,153 +313,4 @@ pub fn from_try(a: &[u8], fl: &mut Flow) -> ServerParseResult {
         Err(_) => {} // didn't find a server key exchange 
     }
     Ok(sr)
-}
-
-
-#[cfg(test)]
-mod tests {
-    use tls_parser::{ClientHelloFingerprint, TlsVersion};
-
-    fn from_hex(hex: &str) -> Vec<u8>
-    {
-        let mut out = Vec::new();
-        for i in (0..hex.len() / 2).map(|x| x * 2) {
-            out.push(u8::from_str_radix(&hex[i..i + 2], 16).unwrap());
-        }
-        out
-    }
-
-
-    #[test]
-    fn test_empty_fingerprint() {
-        let ch = ClientHelloFingerprint {
-            record_tls_version: TlsVersion::TLS10,
-            ch_tls_version: TlsVersion::TLS12,
-            cipher_suites: Vec::new(),
-            compression_methods: Vec::new(),
-            extensions: Vec::new(),
-            named_groups: Vec::new(),
-            ec_point_fmt: Vec::new(),
-            sig_algs: Vec::new(),
-            alpn: Vec::new(),
-            sni: Vec::new(),
-            ticket_size: None,
-            key_share: Vec::new(),
-            psk_key_exchange_modes: Vec::new(),
-            supported_versions: Vec::new(),
-            cert_compression_algs: Vec::new(),
-            record_size_limit: Vec::new(),
-        };
-        assert_eq!(ch.get_fingerprint(), 6116981759083077708);
-    }
-
-
-    #[test]
-    fn test_chrome_fingerprint() {
-        let ch = ClientHelloFingerprint {
-            record_tls_version: TlsVersion::TLS10,
-            ch_tls_version: TlsVersion::TLS12,
-            cipher_suites: vec![0x0a, 0x0a, 0xc0, 0x2b, 0xc0, 0x2f, 0xc0, 0x2c,
-                                0xc0, 0x30, 0xcc, 0xa9, 0xcc, 0xa8, 0xc0, 0x13,
-                                0xc0, 0x14, 0x00, 0x9c, 0x00, 0x9d, 0x00, 0x2f,
-                                0x00, 0x35, 0x00, 0x0a],
-            compression_methods: vec![0],
-            extensions: vec![0x0a, 0x0a, 0xff, 0x01, 0x00, 0x00, 0x00, 0x17,
-                             0x00, 0x23, 0x00, 0x0d, 0x00, 0x05, 0x00, 0x12,
-                             0x00, 0x10, 0x75, 0x50, 0x00, 0x0b, 0x00, 0x0a,
-                             0x0a, 0x0a],
-            named_groups: vec![0x00, 0x08, 0x0a, 0x0a, 0x00, 0x1d, 0x00, 0x17,
-                               0x00, 0x18],
-            ec_point_fmt: vec![0x01, 0x00],
-            sig_algs: vec![0x00, 0x00, 0x00, 0x12, 0x00, 0x04, 0x00, 0x03,
-                           0x00, 0x08, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01,
-                           0x00, 0x05, 0x00, 0x03, 0x00, 0x08, 0x00, 0x05,
-                           0x00, 0x05, 0x00, 0x01, 0x00, 0x08, 0x00, 0x06,
-                           0x00, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01],
-            alpn: vec![0x00, 0x00, 0x00, 0x0c, 0x00, 0x02, 0x00, 0x68,
-                       0x00, 0x32, 0x00, 0x08, 0x00, 0x68, 0x00, 0x74,
-                       0x00, 0x74, 0x00, 0x70, 0x00, 0x2f, 0x00, 0x31,
-                       0x00, 0x2e, 0x00, 0x31],
-            sni: Vec::new(),
-            ticket_size: None,
-            key_share: Vec::new(),
-            psk_key_exchange_modes: Vec::new(),
-            supported_versions: Vec::new(),
-            cert_compression_algs: Vec::new(),
-            record_size_limit: Vec::new(),
-        };
-        assert_eq!(ch.get_fingerprint(), 2850294275305369904);
-    }
-
-    #[test]
-    fn test_parse_ie() {
-        let correct = ClientHelloFingerprint {
-            record_tls_version: TlsVersion::TLS12,
-            ch_tls_version: TlsVersion::TLS12,
-            cipher_suites: vec![0x00, 0x3c, 0x00, 0x2f, 0x00, 0x3d, 0x00, 0x35,
-                                0x00, 0x05, 0x00, 0x0a, 0xc0, 0x27, 0xc0, 0x13,
-                                0xc0, 0x14, 0xc0, 0x2b, 0xc0, 0x23, 0xc0, 0x2c,
-                                0xc0, 0x24, 0xc0, 0x09, 0xc0, 0x0a, 0x00, 0x40,
-                                0x00, 0x32, 0x00, 0x6a, 0x00, 0x38, 0x00, 0x13,
-                                0x00, 0x04],
-            compression_methods: vec![0],
-            extensions: vec![0x00, 0x00, 0x00, 0x05, 0x00, 0x0a, 0x00, 0x0b,
-                             0x00, 0x0d, 0x00, 0x17, 0xff, 0x01],
-            named_groups: vec![0x00, 0x04, 0x00, 0x17, 0x00, 0x18],
-            ec_point_fmt: vec![0x01, 0x00],
-            sig_algs: vec![0x00, 0x0e, 0x04, 0x01, 0x05, 0x01, 0x02, 0x01,
-                           0x04, 0x03, 0x05, 0x03, 0x02, 0x03, 0x02, 0x02],
-            alpn: vec![],
-            sni: Vec::new(),
-            ticket_size: None,
-            key_share: Vec::new(),
-            psk_key_exchange_modes: Vec::new(),
-            supported_versions: Vec::new(),
-            cert_compression_algs: Vec::new(),
-            record_size_limit: Vec::new(),
-        };
-
-        let buf = from_hex("16030300b8010000b4030359dd0e129dddd32e1645a018f43d7685f27972f4f518f5092d5105377b1448c200002a003c002f003d00350005000ac027c013c014c02bc023c02cc024c009c00a00400032006a00380013000401000061000000270025000022696531315f3077696e646f7773372e66696e6765727072696e742e637266732e696f000500050100000000000a0006000400170018000b00020100000d0010000e040105010201040305030203020200170000ff01000100");
-
-        let res = ClientHelloFingerprint::from_try(&buf);
-
-        assert_eq!(res, Ok(correct));
-    }
-
-    #[test]
-    fn test_parse_chrome() {
-        let correct = ClientHelloFingerprint {
-            record_tls_version: TlsVersion::TLS10,
-            ch_tls_version: TlsVersion::TLS12,
-            cipher_suites: vec![0x0a, 0x0a, 0xc0, 0x2b, 0xc0, 0x2f, 0xc0, 0x2c,
-                                0xc0, 0x30, 0xcc, 0xa9, 0xcc, 0xa8, 0xcc, 0x14,
-                                0xcc, 0x13, 0xc0, 0x13, 0xc0, 0x14, 0x00, 0x9c,
-                                0x00, 0x9d, 0x00, 0x2f, 0x00, 0x35, 0x00, 0x0a],
-            compression_methods: vec![0],
-            extensions: vec![0x0a, 0x0a, 0xff, 0x01, 0x00, 0x00, 0x00, 0x17,
-                             0x00, 0x23, 0x00, 0x0d, 0x00, 0x05, 0x00, 0x12,
-                             0x00, 0x10, 0x75, 0x50, 0x00, 0x0b, 0x00, 0x0a,
-                             0x0a, 0x0a],
-            named_groups: vec![0x00, 0x08, 0x0a, 0x0a, 0x00, 0x1d, 0x00, 0x17,
-                               0x00, 0x18],
-            ec_point_fmt: vec![0x01, 0x00],
-            sig_algs: vec![0x00, 0x12, 0x04, 0x03, 0x08, 0x04, 0x04, 0x01,
-                           0x05, 0x03, 0x08, 0x05, 0x05, 0x01, 0x08, 0x06,
-                           0x06, 0x01, 0x02, 0x01],
-            alpn: vec![0x00, 0x0c, 0x02, 0x68, 0x32, 0x08, 0x68, 0x74,
-                       0x74, 0x70, 0x2f, 0x31, 0x2e, 0x31],
-            sni: Vec::new(),
-            ticket_size: None,
-            key_share: Vec::new(),
-            psk_key_exchange_modes: Vec::new(),
-            supported_versions: Vec::new(),
-            cert_compression_algs: Vec::new(),
-            record_size_limit: Vec::new(),
-        };
-
-        let buf = from_hex("16030100e2010000de03036060d2755be23452624da20b1243313e638a444f15ee3968c6a20d05b63eaeab0000206a6ac02bc02fc02cc030cca9cca8cc14cc13c013c014009c009d002f0035000a01000095dada0000ff010001000000002c002a0000276368726f6d6535365f306f73787369657272612e66696e6765727072696e742e637266732e696f0017000000230000000d00140012040308040401050308050501080606010201000500050100000000001200000010000e000c02683208687474702f312e3175500000000b00020100000a000a00086a6a001d001700187a7a000100");
-
-        let res = ClientHelloFingerprint::from_try(&buf);
-        assert_eq!(res, Ok(correct));
-    }
 }
