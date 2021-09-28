@@ -55,12 +55,13 @@ impl MeasurementCache {
         }
     }
 
-    pub fn update_primer_certificate(&mut self, flow: &Flow, pub_key: Vec<u8>)
+    pub fn update_primer_certificate(&mut self, flow: &Flow, pub_key: Vec<u8>, sig_alg: i32)
     {
         match self.primers_new.get_mut(&flow) {
             Some(mut primer) => {
                 println!("Adding public key");
                 primer.pub_key = pub_key;
+                primer.sig_alg = sig_alg;
                 primer.next_state = TlsHandshakeType::ServerKeyExchange;
             } ,
             _ => {}
@@ -173,6 +174,7 @@ impl MeasurementCache {
                 stale_primer_flows.insert(*flow);
             }
             else if curr_time - primer.start_time > MEASUREMENT_CACHE_FLUSH {
+                println!("Removing stale primer");
                 stale_primer_flows.insert(*flow);
             }
         }

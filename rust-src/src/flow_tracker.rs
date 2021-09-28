@@ -245,10 +245,10 @@ impl FlowTracker {
 
                     match fp.get_certificate() {
                         Some(ref cert) => {
-                            // println!("Cert key: {:02x?}", cert.public_key().unwrap().public_key_to_der().unwrap());
-                            // println!("Sig alg: {:02x?}", cert.signature_algorithm());
+                            let sig_alg = cert.signature_algorithm().object().nid().as_raw();
+                            let pub_key = cert.public_key().unwrap().public_key_to_der().unwrap();
                             // replace flow with new overflow one
-                            self.cache.update_primer_certificate(&flow.reversed_clone(), cert.public_key().unwrap().public_key_to_der().unwrap());
+                            self.cache.update_primer_certificate(&flow.reversed_clone(), pub_key, sig_alg);
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
                             self.tracked_server_flows.insert(flow, cid);
                         }
@@ -317,8 +317,9 @@ impl FlowTracker {
                     cipher_suite,
                     tls_alert,
                     pub_key,
-                    signature)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    signature,
+                    sig_alg)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT DO NOTHING;"
             )
             {
@@ -331,7 +332,7 @@ impl FlowTracker {
 
             for (_k, primer) in pcache {
                 let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.id as i64), &(primer.client_random),
-                    &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key), &(primer.signature)]);
+                    &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key), &(primer.signature), &(primer.sig_alg)]);
                 if updated_rows.is_err() {
                     println!("Error updating primers: {:?}", updated_rows)
                 }

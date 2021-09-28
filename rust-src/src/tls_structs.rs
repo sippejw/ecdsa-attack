@@ -678,6 +678,7 @@ pub struct Primer {
     pub alert_message: TlsAlertMessage,
     pub is_complete: bool,
     pub start_time: i64,
+    pub sig_alg: i32,
     pub signature: Option<Vec<u8>>,
     pub next_state: TlsHandshakeType,
 }
@@ -701,6 +702,7 @@ impl Primer {
             alert_message: TlsAlertMessage::CloseNotify,
             is_complete: false,
             start_time: curr_time,
+            sig_alg: 0,
             signature: Some(Vec::new()),
             next_state: TlsHandshakeType::ServerHello,
         }
