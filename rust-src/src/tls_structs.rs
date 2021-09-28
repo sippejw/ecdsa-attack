@@ -16,7 +16,6 @@ use tls_parser;
 use self::num::FromPrimitive;
 
 use std::fmt;
-
 enum_from_primitive! {
 #[repr(u8)]
 #[derive(PartialEq)]
@@ -1043,6 +1042,53 @@ impl TlsAlert {
 pub struct ServerCertificateStatus {
     pub certificate_status_type: u8,
 }
+
+#[derive(Clone, Debug)]
+pub struct TCPRemainder {
+    remainder: Vec<u8>,
+    _expected_seq: u32, 
+}
+
+#[derive(Debug)]
+pub struct TLSRecord {
+    content_type: u8,
+    tls_version: TlsVersion,
+    data: Vec<u8>,
+}
+
+impl TCPRemainder {
+    pub fn new() -> TCPRemainder {
+        TCPRemainder {
+            remainder: Vec::new(),
+            _expected_seq: 0,
+        }
+    }
+    pub fn get_tls_record(&mut self, p: &[u8]) -> Option<TLSRecord> {
+        self.remainder.extend_from_slice(p);
+        if self.remainder.len() < 5 {
+            return None
+        }
+        let record_type = self.remainder[0];
+        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(self.remainder[1], self.remainder[2])) {
+            Some(tls_version) => tls_version,
+            None => return None
+        };
+        let record_length = u8_to_u16_be(self.remainder[3], self.remainder[4]);
+        
+        if record_length > (self.remainder.len() - 5) as u16 {
+            return None;
+        }
+        self.remainder.drain(0..5);
+        let data = self.remainder.drain(0..(record_length as usize));
+
+        Some(TLSRecord {
+            content_type: record_type,
+            tls_version: record_tls_version,
+            data: data.collect(),
+        })
+    }
+}
+
 
 #[derive(Debug, PartialEq, Default)]
 pub struct ServerHello {
