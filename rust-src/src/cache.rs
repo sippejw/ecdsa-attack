@@ -39,7 +39,7 @@ impl MeasurementCache {
 
     pub fn add_primer(&mut self, flow: &Flow, primer: Primer) {
         if !self.primers_flushed.contains(&flow) {
-            self.primers_new.insert(flow.clone(), primer);
+            self.primers_new.insert(*flow, primer);
         }
     }
 
@@ -125,7 +125,7 @@ impl MeasurementCache {
                             sid: 0,
                             time_sec: time_sec,
                         };
-                        self.ipv4_connections.insert(flow.clone(), c);
+                        self.ipv4_connections.insert(*flow, c);
                         self.ipv4_connections_seen.insert((cid, serv_ip));
                         return
                     }
@@ -147,7 +147,7 @@ impl MeasurementCache {
                             sid: 0,
                             time_sec: time_sec,
                         };
-                        self.ipv6_connections.insert(flow.clone(), c);
+                        self.ipv6_connections.insert(*flow, c);
                         return
                     }
                     IpAddr::V4(_) => {
@@ -169,13 +169,13 @@ impl MeasurementCache {
         let curr_time = time::now().to_timespec().sec;
         for (flow, primer) in self.primers_new.iter() {
             if primer.is_complete == true {
-                self.primers_flushed.insert(flow.clone());
-                primers_ready.insert(flow.clone(), primer.clone());
-                stale_primer_flows.insert(flow.clone());
+                self.primers_flushed.insert(*flow);
+                primers_ready.insert(*flow, primer.clone());
+                stale_primer_flows.insert(*flow);
             }
             else if curr_time - primer.start_time > MEASUREMENT_CACHE_FLUSH {
                 println!("Removing stale primer");
-                stale_primer_flows.insert(flow.clone());
+                stale_primer_flows.insert(*flow);
             }
         }
         for flow in stale_primer_flows {
@@ -189,7 +189,7 @@ impl MeasurementCache {
         let curr_sec = self.last_flush.to_timespec().sec;
         for (flow, conn) in self.ipv4_connections.iter() {
             if conn.sid != 0 || curr_sec - conn.time_sec > CONNECTION_SID_WAIT_TIMEOUT {
-                hs_flows.insert(flow.clone());
+                hs_flows.insert(*flow);
             }
         }
         hs_flows
@@ -210,7 +210,7 @@ impl MeasurementCache {
         let curr_sec = self.last_flush.to_timespec().sec;
         for (flow, conn) in self.ipv6_connections.iter() {
             if conn.sid != 0 || curr_sec - conn.time_sec > CONNECTION_SID_WAIT_TIMEOUT {
-                hs_flows.insert(flow.clone());
+                hs_flows.insert(*flow);
             }
         }
         hs_flows

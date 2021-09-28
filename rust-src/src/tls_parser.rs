@@ -3,7 +3,7 @@ extern crate openssl;
 
 use self::num::FromPrimitive;
 use self::openssl::x509::X509;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use common::{Flow, ParseError, u8_to_u16_be, u8_to_u32_be};
 use tls_structs::{CipherSuite, HasSignature, ServerCertificateParseResult, ServerHello, ServerHelloParseResult, 
     ServerKeyExchange, ServerKeyExchangeParseResult, ServerParseResult, ServerCertificateStatusParseResult, ServerReturn, TlsHandshakeType, TlsRecordType,
@@ -339,7 +339,7 @@ pub fn from_try(a: &[u8], fl: &mut Flow) -> ServerParseResult {
         }
         Err(_) => {} // didn't find server hello
     }
-
+    
     // now check for other records!
 
     match find_certificate(a, fl) {

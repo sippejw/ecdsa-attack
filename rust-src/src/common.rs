@@ -5,7 +5,7 @@ use pnet::packet::tcp::TcpPacket;
 
 use self::crypto::digest::Digest;
 
-use tls_structs::{CipherSuite, TCPRemainder};
+use tls_structs::CipherSuite;
 
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
@@ -53,7 +53,7 @@ pub enum ParseError {
     MissedServerResponse
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct Flow {
     pub src_ip: IpAddr,
     pub dst_ip: IpAddr,
@@ -61,7 +61,6 @@ pub struct Flow {
     pub dst_port: u16,
     pub overflow: usize,
     pub cipher_suite: CipherSuite,
-    pub remainder: TCPRemainder,
 }
 
 impl PartialEq for Flow {
@@ -96,7 +95,6 @@ impl Flow {
             dst_port: tcp_pkt.get_destination(),
             overflow: of,
             cipher_suite: cs,
-            remainder: TCPRemainder::new(),
         }
     }
     pub fn reversed_clone(&self) -> Flow {
@@ -104,9 +102,7 @@ impl Flow {
             src_port: self.dst_port,
             dst_ip: self.src_ip,
             dst_port: self.src_port,
-            overflow: self.overflow,
-            cipher_suite: self.cipher_suite,
-            remainder: self.remainder.clone(),
+            ..*self
         }
     }
 }

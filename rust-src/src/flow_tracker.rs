@@ -223,7 +223,7 @@ impl FlowTracker {
         // check for ServerHello
         if !is_client && self.tracked_server_flows.contains_key(&flow) {
             // reassign flow to get the one with the correct overflow & cipher_suite
-            for (key, _) in self.tracked_server_flows.iter() {
+            for (&key, _) in self.tracked_server_flows.iter() {
                 if key == flow {
                     flow = key;
                     break;
@@ -236,7 +236,7 @@ impl FlowTracker {
                         Some(ref sh) => {
                             // replace flow with new overflow one
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
-                            self.tracked_server_flows.insert(flow.clone(), cid);
+                            self.tracked_server_flows.insert(flow, cid);
 
                             self.cache.update_primer_server_hello(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
                         }
@@ -250,7 +250,7 @@ impl FlowTracker {
                             // replace flow with new overflow one
                             self.cache.update_primer_certificate(&flow.reversed_clone(), pub_key, sig_alg);
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
-                            self.tracked_server_flows.insert(flow.clone(), cid);
+                            self.tracked_server_flows.insert(flow, cid);
                         }
                         None => {/*println!("got no cert");*/}
 
@@ -365,9 +365,9 @@ impl FlowTracker {
         // to do a second check on overdueness, and this is simplest.
         self.stale_drops.push_back(TimedFlow {
             event_time: Instant::now(),
-            flow: flow.clone(),
+            flow: *flow,
         });
-        self.tracked_flows.insert(flow.clone());
+        self.tracked_flows.insert(*flow);
     }
 
     fn begin_tracking_server_flow(&mut self, flow: &Flow, cid: i64) {
@@ -375,9 +375,9 @@ impl FlowTracker {
         // to do a second check on overdueness, and this is simplest.
         self.stale_server_drops.push_back(TimedFlow {
             event_time: Instant::now(),
-            flow: flow.clone(),
+            flow: *flow,
         });
-        self.tracked_server_flows.insert(flow.clone(), cid);
+        self.tracked_server_flows.insert(*flow, cid);
     }
 
     // not called internally, has to be called externally
