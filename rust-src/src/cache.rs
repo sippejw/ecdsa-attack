@@ -1,7 +1,7 @@
 extern crate time;
 
 use std::collections::{HashSet, HashMap};
-use common::{Flow, ConnectionIPv6, ConnectionIPv4, u8_to_u16_be, u8_to_u32_be, u8array_to_u32_be};
+use common::{Flow, ConnectionIPv4, u8_to_u16_be, u8_to_u32_be, u8array_to_u32_be};
 use std::net::IpAddr;
 use tls_structs::{CipherSuite, Primer, TlsAlertMessage, TlsHandshakeType};
 use stats_tracker::StatsTracker;
@@ -13,11 +13,6 @@ pub struct MeasurementCache {
     // for Primer
     primers_new: HashMap<Flow, Primer>,
     primers_flushed: HashSet<Flow>,
-
-    // for connections
-    ipv4_connections_seen: HashSet<(i64, u32)>,
-    ipv4_connections: HashMap<Flow, ConnectionIPv4>,
-    ipv6_connections: HashMap<Flow, ConnectionIPv6>,
 }
 
 pub const MEASUREMENT_CACHE_FLUSH: i64 = 60; // every min
@@ -30,16 +25,12 @@ impl MeasurementCache {
 
             primers_flushed: HashSet::new(),
             primers_new: HashMap::new(),
-
-            ipv4_connections_seen: HashSet::new(),
-            ipv4_connections: HashMap::new(),
-            ipv6_connections: HashMap::new(),
         }
     }
 
     pub fn add_primer(&mut self, flow: &Flow, primer: Primer) {
         if !self.primers_flushed.contains(&flow) {
-            self.primers_new.insert(flow.clone(), primer);
+            self.primers_new.insert(*flow, primer);
         }
     }
 
@@ -108,57 +99,6 @@ impl MeasurementCache {
         }
     }
 
-    pub fn add_connection(&mut self, flow: &Flow, cid: i64, sni: Vec<u8>, time_sec: i64) {
-        match flow.src_ip {
-            IpAddr::V4(ip_src) => {
-                match flow.dst_ip {
-                    IpAddr::V4(ip_dst) => {
-                        let serv_ip = u8array_to_u32_be(ip_dst.octets());
-                        if self.ipv4_connections_seen.contains(&(cid, serv_ip)) {
-                            return
-                        }
-                        let c = ConnectionIPv4 {
-                            anon_cli_ip: u8_to_u16_be(ip_src.octets()[0], ip_src.octets()[1]) as i16,
-                            serv_ip: serv_ip,
-                            id: cid,
-                            sni: sni,
-                            sid: 0,
-                            time_sec: time_sec,
-                        };
-                        self.ipv4_connections.insert(flow.clone(), c);
-                        self.ipv4_connections_seen.insert((cid, serv_ip));
-                        return
-                    }
-                    IpAddr::V6(_) => {
-                        println!("[WARNING] IP versions mismatch! source(ipv4): {}, destination(ipv6): {}",
-                                 flow.src_ip, flow.dst_ip);
-                    }
-                }
-            }
-            IpAddr::V6(ip_src) => {
-                match flow.dst_ip {
-                    IpAddr::V6(ip_dst) => {
-                        let c = ConnectionIPv6 {
-                            anon_cli_ip: u8_to_u32_be(ip_src.octets()[0], ip_src.octets()[1],
-                                                      ip_src.octets()[2], ip_src.octets()[3]),
-                            serv_ip: ip_dst.octets().to_vec(),
-                            id: cid,
-                            sni: sni,
-                            sid: 0,
-                            time_sec: time_sec,
-                        };
-                        self.ipv6_connections.insert(flow.clone(), c);
-                        return
-                    }
-                    IpAddr::V4(_) => {
-                        println!("[WARNING] IP versions mismatch! source(ipv6): {}, destination(ipv4): {}",
-                                 flow.src_ip, flow.dst_ip);
-                    }
-                }
-            }
-        }
-    }
-
     // Confirms primers is complete
     // Returns cached HashMap of primers to be added to db
     // Removes stale and ready primers
@@ -169,60 +109,18 @@ impl MeasurementCache {
         let curr_time = time::now().to_timespec().sec;
         for (flow, primer) in self.primers_new.iter() {
             if primer.is_complete == true {
-                self.primers_flushed.insert(flow.clone());
-                primers_ready.insert(flow.clone(), primer.clone());
-                stale_primer_flows.insert(flow.clone());
+                self.primers_flushed.insert(*flow);
+                primers_ready.insert(*flow, primer.clone());
+                stale_primer_flows.insert(*flow);
             }
             else if curr_time - primer.start_time > MEASUREMENT_CACHE_FLUSH {
                 println!("Removing stale primer");
-                stale_primer_flows.insert(flow.clone());
+                stale_primer_flows.insert(*flow);
             }
         }
         for flow in stale_primer_flows {
             self.primers_new.remove(&flow);
         }
         return primers_ready;
-    }
-
-    fn get_ipv4connections_to_flush(&self) -> HashSet<Flow> {
-        let mut hs_flows = HashSet::new();
-        let curr_sec = self.last_flush.to_timespec().sec;
-        for (flow, conn) in self.ipv4_connections.iter() {
-            if conn.sid != 0 || curr_sec - conn.time_sec > CONNECTION_SID_WAIT_TIMEOUT {
-                hs_flows.insert(flow.clone());
-            }
-        }
-        hs_flows
-    }
-
-    // returns cached HashMap of ipv4 connections, empties it in object
-    pub fn flush_ipv4connections(&mut self) -> HashSet<ConnectionIPv4> {
-        self.last_flush = time::now();
-        let mut hs_conns = HashSet::new();
-        for flow in self.get_ipv4connections_to_flush() {
-            hs_conns.insert(self.ipv4_connections.remove(&flow).unwrap());
-        }
-        hs_conns
-    }
-
-    fn get_ipv6connections_to_flush(&self) -> HashSet<Flow> {
-        let mut hs_flows = HashSet::new();
-        let curr_sec = self.last_flush.to_timespec().sec;
-        for (flow, conn) in self.ipv6_connections.iter() {
-            if conn.sid != 0 || curr_sec - conn.time_sec > CONNECTION_SID_WAIT_TIMEOUT {
-                hs_flows.insert(flow.clone());
-            }
-        }
-        hs_flows
-    }
-
-    // returns cached HashMap of ipv6 connections, empties it in object
-    pub fn flush_ipv6connections(&mut self) -> HashSet<ConnectionIPv6> {
-        self.last_flush = time::now();
-        let mut hs_conns = HashSet::new();
-        for flow in self.get_ipv6connections_to_flush() {
-            hs_conns.insert(self.ipv6_connections.remove(&flow).unwrap());
-        }
-        hs_conns
     }
 }

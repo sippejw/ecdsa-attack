@@ -16,6 +16,7 @@ use tls_parser;
 use self::num::FromPrimitive;
 
 use std::fmt;
+
 enum_from_primitive! {
 #[repr(u8)]
 #[derive(PartialEq)]
@@ -669,6 +670,7 @@ pub enum HasSignature {
 #[derive(Clone)]
 pub struct Primer {
     pub id: u64,
+    pub server_ip: Option<u32>,
     pub client_random: Vec<u8>,
     pub server_random: Vec<u8>,
     pub server_params: Vec<u8>,
@@ -683,7 +685,7 @@ pub struct Primer {
 }
 
 impl Primer {
-    pub fn new(cli_random: Vec<u8>) -> Primer {
+    pub fn new(server_ip: Option<u32>, cli_random: Vec<u8>) -> Primer {
         let mut hasher = Sha1::new();
         let curr_time = time::now().to_timespec().sec;
         hash_u64(&mut hasher, curr_time as u64);
@@ -693,6 +695,7 @@ impl Primer {
         let id = BigEndian::read_u64(&result[0..8]);
         Primer {
             id: id,
+            server_ip: server_ip,
             client_random: cli_random,
             server_random: Vec::new(),
             server_params: Vec::new(),
@@ -1046,14 +1049,14 @@ pub struct ServerCertificateStatus {
 #[derive(Clone, Debug)]
 pub struct TCPRemainder {
     remainder: Vec<u8>,
-    _expected_seq: u32, 
+    _expected_seq: u32,
 }
 
 #[derive(Debug)]
 pub struct TLSRecord {
-    content_type: u8,
-    tls_version: TlsVersion,
-    data: Vec<u8>,
+    pub content_type: u8,
+    pub tls_version: TlsVersion,
+    pub data: Vec<u8>,
 }
 
 impl TCPRemainder {
@@ -1063,8 +1066,13 @@ impl TCPRemainder {
             _expected_seq: 0,
         }
     }
-    pub fn get_tls_record(&mut self, p: &[u8]) -> Option<TLSRecord> {
-        self.remainder.extend_from_slice(p);
+
+    pub fn get_tls_record(&mut self, p: Option<&[u8]>) -> Option<TLSRecord> {
+        match p {
+            Some(ref new_packet) => self.remainder.extend_from_slice(new_packet),
+            None => {}
+        }
+
         if self.remainder.len() < 5 {
             return None
         }
@@ -1074,7 +1082,7 @@ impl TCPRemainder {
             None => return None
         };
         let record_length = u8_to_u16_be(self.remainder[3], self.remainder[4]);
-        
+
         if record_length > (self.remainder.len() - 5) as u16 {
             return None;
         }
@@ -1088,7 +1096,6 @@ impl TCPRemainder {
         })
     }
 }
-
 
 #[derive(Debug, PartialEq, Default)]
 pub struct ServerHello {

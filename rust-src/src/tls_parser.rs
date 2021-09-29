@@ -1,9 +1,11 @@
 extern crate num;
 extern crate openssl;
 
+use crate::tls_structs::{TCPRemainder, TLSRecord};
+
 use self::num::FromPrimitive;
 use self::openssl::x509::X509;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use common::{Flow, ParseError, u8_to_u16_be, u8_to_u32_be};
 use tls_structs::{CipherSuite, HasSignature, ServerCertificateParseResult, ServerHello, ServerHelloParseResult, 
     ServerKeyExchange, ServerKeyExchangeParseResult, ServerParseResult, ServerCertificateStatusParseResult, ServerReturn, TlsHandshakeType, TlsRecordType,
@@ -51,45 +53,31 @@ pub fn parse_key_share(arr: &[u8]) -> Result<Vec<u8>, ParseError> {
     Ok(res)
 }
 
-pub fn find_server_hello(a: &[u8], fl: &mut Flow) -> ServerHelloParseResult {
-    let of = fl.overflow;
-    if a.len() - 1 < of {
-        return Err(ParseError::ShortBuffer);
-    }
-
-    let record_type = a[of];
-    if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+pub fn find_server_hello(a: &[u8], record_type: Option<TlsRecordType>, record_tls_version: TlsVersion, fl: &mut Flow) -> ServerHelloParseResult {
+    if record_type != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
     }
-
-    let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
-        Some(tls_version) => tls_version,
-        None => return Err(ParseError::UnknownRecordTLSVersion),
-    };
-
-    let record_length = u8_to_u16_be(a[of+3], a[of+4]);
-    if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-        return Err(ParseError::ShortOuterRecord);
-    }
+    
+    let record_length = a.len();
 
     // TODO: make this more general, not just parsing hellos anymore
-    if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::ServerHello) {
+    if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::ServerHello) {
         return Err(ParseError::NotAServerHello);
     }
 
-    let ch_length = u8_to_u32_be(0, a[of+6], a[of+7], a[of+8]);
+    let ch_length = u8_to_u32_be(0, a[1], a[2], a[3]);
     if ch_length != record_length as u32 - 4 {
         return Err(ParseError::InnerOuterRecordLenContradict);
     }
 
-    let sh_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+9], a[of+10])) {
+    let sh_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[4], a[5])) {
         Some(tls_version) => tls_version,
         None => return Err(ParseError::UnknownChTLSVersion),
     };
 
     // 32 bytes of client random
 
-    let mut offset: usize = of+11;
+    let mut offset: usize = 6;
     let server_random = ungrease_u8(&a[offset..offset+32]);
     offset += 32;
 
@@ -151,89 +139,49 @@ pub fn find_server_hello(a: &[u8], fl: &mut Flow) -> ServerHelloParseResult {
         };
     }
 
-    fl.overflow = of+offset;
-
     Ok(sh)
 }
 
-pub fn find_certificate(a: &[u8], fl: &mut Flow) -> ServerCertificateParseResult {
-    let of = fl.overflow;
-    if a.len() - 1 < of {
-        return Err(ParseError::ShortBuffer);
-    }
+pub fn find_certificate(a: &[u8], record_type: Option<TlsRecordType>, fl: &mut Flow) -> ServerCertificateParseResult {
 
-    let record_type = a[of];
-    if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+    if record_type != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
     }
-    let mut offset: usize = 1;
-    let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
-        Some(tls_version) => tls_version,
-        None => return Err(ParseError::UnknownRecordTLSVersion),
-    };
-    offset += 2;
 
-    let record_length = u8_to_u16_be(a[of+3], a[of+4]);
-    if usize::from_u16(record_length).unwrap() > a[of..].len() - 5 {
-        // have an overflow of certs between packets
-        fl.overflow = record_length as usize - a[of+5..].len();
-    }
-    offset += 2;
-    offset += record_length as usize;
-    if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::Certificate) {
+    let record_length = a.len();
+
+    if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::Certificate) {
         return Err(ParseError::NotACertificate);
     }
 
-    let ch_length = u8_to_u32_be(0, a[of+6], a[of+7], a[of+8]);
+    let ch_length = u8_to_u32_be(0, a[1], a[2], a[3]);
     if ch_length != record_length as u32 - 4 {
         return Err(ParseError::InnerOuterRecordLenContradict);
     }
-    let cert_len = u8_to_u32_be(0, a[of+12], a[of+13], a[of+14]) as usize;
+    let cert_len = u8_to_u32_be(0, a[7], a[8], a[9]) as usize;
 
-    if a[of+15..].len() < cert_len {
+    if a[10..].len() < cert_len {
         return Err(ParseError::NotFullCertificate);
     }
 
-    fl.overflow = of + offset;
     // we have a full certificate here
 
-    match X509::from_der(&a[of+15..of+15+cert_len]) {
+    match X509::from_der(&a[10..10+cert_len]) {
         Ok(cert) => Ok(cert),
         Err(_) => Err(ParseError::NotACertificate),
     }
 }
 
-pub fn find_certificate_status(a: &[u8], fl: &mut Flow) -> ServerCertificateStatusParseResult {
-    let mut of = fl.overflow;
-    if a.len() - 1 < of {
-        return Err(ParseError::ShortBuffer);
-    }
-    let record_type = a[of];
-    if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+pub fn find_certificate_status(a: &[u8], record_type: Option<TlsRecordType>, fl: &mut Flow) -> ServerCertificateStatusParseResult {
+    if record_type != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
     }
-    let mut offset: usize = 1;
 
-    let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
-        Some(tls_version) => tls_version,
-        None => return Err(ParseError::UnknownRecordTLSVersion),
-    };
-    offset += 2;
-
-    let record_length = u8_to_u16_be(a[of+3], a[of+4]);
-    if usize::from_u16(record_length).unwrap() > a[of..].len() - 5 {
-        // have an overflow of certs between packets
-        fl.overflow = record_length as usize - a[of+5..].len();
-    }
-    offset += 2;
-    offset += record_length as usize;
-
-    if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::CertificateStatus) {
+    if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::CertificateStatus) {
         return Err(ParseError::NoCertificateStatus);
     }
-    fl.overflow = of + offset;
 
-    let status_type = a[of+9];
+    let status_type = a[4];
 
     let status = ServerCertificateStatus {
         certificate_status_type: status_type,
@@ -242,29 +190,18 @@ pub fn find_certificate_status(a: &[u8], fl: &mut Flow) -> ServerCertificateStat
     Ok(status)
 }
 
-pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangeParseResult {
-    let mut of = fl.overflow;
-    if a.len() - 1 < of {
-        return Err(ParseError::ShortBuffer);
-    }
-
-    let record_type = a[of];
-    if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+pub fn find_server_key_exchange(a: &[u8], record_type: Option<TlsRecordType>, fl: &mut Flow) -> ServerKeyExchangeParseResult {
+    if record_type != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
     }
 
-    let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[of+1], a[of+2])) {
-        Some(tls_version) => tls_version,
-        None => return Err(ParseError::UnknownRecordTLSVersion),
-    };
+    let record_length = a.len();
 
-    let record_length = u8_to_u16_be(a[of+3], a[of+4]);
-
-    if TlsHandshakeType::from_u8(a[of+5]) != Some(TlsHandshakeType::ServerKeyExchange) {
+    if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::ServerKeyExchange) {
         return Err(ParseError::NoServerKeyExchange);
     }
 
-    let ch_length = u8_to_u32_be(0, a[of+6], a[of+7], a[of+8]);
+    let ch_length = u8_to_u32_be(0, a[1], a[2], a[3]);
     if ch_length != record_length as u32 - 4 {
         return Err(ParseError::InnerOuterRecordLenContradict);
     }
@@ -273,7 +210,7 @@ pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangePar
     // ECDHE named curve
     
     //beginning of data
-    of = of+9;
+    let mut of = 4;
 
     // for ECDHE there is one byte for the type of curve to follow, for now only implement named_curve (0x03)
 
@@ -293,8 +230,7 @@ pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangePar
         println!("Packet doesn't have full server key exchange");
         return Err(ParseError::ShortBuffer);
     }
-    // this will have all of server key exchange so we have no more overflow on this flow
-    fl.overflow = 0;
+
     params.extend(a[of+4..of+4+a[of+3] as usize].iter());// all of public key
     // (ec)dh(e)_rsa has a signature, we know whether it was selected from server hello
     of += 4 + a[of+3] as usize;
@@ -322,7 +258,7 @@ pub fn find_server_key_exchange(a: &[u8], fl: &mut Flow) -> ServerKeyExchangePar
 
 }
 
-pub fn from_try(a: &[u8], fl: &mut Flow) -> ServerParseResult {
+pub fn from_try(a: &[u8], fl: &mut Flow, remainder: &mut TCPRemainder) -> ServerParseResult {
     // not as important for general check.
 
     let mut sr = ServerReturn {
@@ -332,35 +268,64 @@ pub fn from_try(a: &[u8], fl: &mut Flow) -> ServerParseResult {
         server_key_exchange: None,
     };
 
-    // first check for a ServerHello:
-    match find_server_hello(a, fl) {
-        Ok(sh) => {
-            sr.server_hello = enum_primitive::Option::Some(sh);
+    let mut packet = remainder.get_tls_record(Some(a));
+    match packet {
+        Some(ref tls) => {
+            match find_server_hello(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), tls.tls_version, fl) {
+                Ok(sh) => {
+                    println!("Found server hello");
+                    sr.server_hello = enum_primitive::Option::Some(sh);
+                    packet = remainder.get_tls_record(None);
+                }
+                Err(_) => {} // didn't find server hello
+            }
         }
-        Err(_) => {} // didn't find server hello
+        None => {}
     }
-
+    
     // now check for other records!
-
-    match find_certificate(a, fl) {
-        Ok(cert) => {
-            sr.cert = enum_primitive::Option::Some(cert);
+    match packet {
+        Some(ref tls) => {
+            match find_certificate(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), fl) {
+                Ok(cert) => {
+                    println!("Found certificate");
+                    sr.cert = enum_primitive::Option::Some(cert);
+                    packet = remainder.get_tls_record(None);
+                }
+                Err(_) => {} // didn't find a certificate
+            }
         }
-        Err(_) => {} // didn't find a certificate
+        None => {}
     }
 
-    match find_certificate_status(a, fl) {
-        Ok(status) => {
-            sr.cert_status = enum_primitive::Option::Some(status);
+
+    match packet {
+        Some(ref tls) => {
+            match find_certificate_status(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), fl) {
+                Ok(status) => {
+                    println!("Found certificate status");
+                    sr.cert_status = enum_primitive::Option::Some(status);
+                    packet = remainder.get_tls_record(None);
+                }
+                Err(_) => {} // didn't find a certificate status
+            }
         }
-        Err(_) => {} // didn't find a certificate status
+        None => {}
     }
 
-    match find_server_key_exchange(a, fl) {
-        Ok(ske) => {
-            sr.server_key_exchange = enum_primitive::Option::Some(ske);
+    match packet {
+        Some(ref tls) => {
+            match find_server_key_exchange(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), fl) {
+                Ok(ske) => {
+                    println!("Found ske");
+                    sr.server_key_exchange = enum_primitive::Option::Some(ske);
+                    packet = remainder.get_tls_record(None);
+                }
+                Err(_) => {} // didn't find a server key exchange 
+            }
         }
-        Err(_) => {} // didn't find a server key exchange 
+        None => {}
     }
+    
     Ok(sr)
 }

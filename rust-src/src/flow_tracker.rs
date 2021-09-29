@@ -10,16 +10,18 @@ use pnet::packet::Packet;
 use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum};
 
 use std::collections::{HashSet, HashMap, VecDeque};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::ops::Sub;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
-use common::{TimedFlow, Flow};
+use common::{TimedFlow, Flow, u8array_to_u32_be};
 use stats_tracker::StatsTracker;
 use tls_parser;
 use tls_structs::{CipherSuite, ClientHello, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, TlsHandshakeType};
+
+use crate::tls_structs::TCPRemainder;
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -30,6 +32,8 @@ pub struct FlowTracker {
     cache: MeasurementCache,
 
     pub stats: StatsTracker,
+
+    tracked_tcp_remainders: HashMap<Flow, TCPRemainder>,
 
     // Keys present in this set are flows we parse ClientHello from
     tracked_flows: HashSet<Flow>,
@@ -44,6 +48,7 @@ impl FlowTracker {
     pub fn new() -> FlowTracker {
         FlowTracker {
             flow_timeout: Duration::from_secs(20),
+            tracked_tcp_remainders: HashMap::new(),
             tracked_flows: HashSet::new(),
             stale_drops: VecDeque::with_capacity(65536),
             tracked_server_flows: HashMap::new(),
@@ -62,6 +67,7 @@ impl FlowTracker {
 
         let mut ft = FlowTracker {
             flow_timeout: Duration::from_secs(20),
+            tracked_tcp_remainders: HashMap::new(),
             tracked_flows: HashSet::new(),
             stale_drops: VecDeque::with_capacity(65536),
             tracked_server_flows: HashMap::new(),
@@ -143,10 +149,13 @@ impl FlowTracker {
         let tcp_flags = tcp_pkt.get_flags();
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.begin_tracking_flow(&flow, tcp_pkt.packet().to_vec());
+            let tcp_remainder = TCPRemainder::new();
+            self.tracked_tcp_remainders.insert(flow, tcp_remainder);
             return;
         }
         if (tcp_flags & TcpFlags::FIN) != 0 || (tcp_flags & TcpFlags::RST) != 0 {
             self.tracked_flows.remove(&flow);
+            self.tracked_tcp_remainders.remove(&flow);
             return;
         }
         if tcp_pkt.payload().len() == 0 {
@@ -164,6 +173,7 @@ impl FlowTracker {
                                 self.stats.primers_completed += 1;
                             }
                             self.tracked_flows.remove(&flow);
+                            self.tracked_tcp_remainders.remove(&flow);
                         }
                         // If not Client Key Exchange, try TLS Alert
                         Err(err) => {
@@ -175,6 +185,7 @@ impl FlowTracker {
                                             self.stats.primers_completed += 1;
                                         }
                                         self.tracked_flows.remove(&flow);
+                                        self.tracked_tcp_remainders.remove(&flow);
                                     }
                                 }
                                 // If not TLS Alert, send original error message
@@ -188,16 +199,18 @@ impl FlowTracker {
                     match ClientHello::from_try(tcp_pkt.payload()) {
                         Ok(fp) => {
                             self.stats.primers_created += 1;
-
-                            let primer = Primer::new(fp.client_random.clone());
+                            let mut addr = None;
+                            match source {
+                                IpAddr::V4(serv_ip) => {
+                                    addr = Some(u8array_to_u32_be(serv_ip.octets()));
+                                }
+                                _ => {}
+                            }
+                            let primer = Primer::new(addr, fp.client_random.clone());
 
                             self.begin_tracking_server_flow(&flow.reversed_clone(), primer.id as i64);
 
                             let curr_time = time::now();
-                            // insert current fingerprint and measurement
-                            self.cache.add_connection(&flow, primer.id as i64,
-                                fp.sni.to_vec(), curr_time.to_timespec().sec);
-
                             // insert primer
                             self.cache.add_primer(&flow, primer);
                             if self.write_to_db {
@@ -223,20 +236,21 @@ impl FlowTracker {
         // check for ServerHello
         if !is_client && self.tracked_server_flows.contains_key(&flow) {
             // reassign flow to get the one with the correct overflow & cipher_suite
-            for (key, _) in self.tracked_server_flows.iter() {
+            for (&key, _) in self.tracked_server_flows.iter() {
                 if key == flow {
                     flow = key;
                     break;
                 }
             }
+            let tcp_remainder = self.tracked_tcp_remainders.get_mut(&flow.reversed_clone());
 
-            match tls_parser::from_try(tcp_pkt.payload(), &mut flow) {
+            match tls_parser::from_try(tcp_pkt.payload(), &mut flow, &mut tcp_remainder.unwrap()) {
                 Ok(fp) => {
                     match fp.get_server_hello() {
                         Some(ref sh) => {
                             // replace flow with new overflow one
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
-                            self.tracked_server_flows.insert(flow.clone(), cid);
+                            self.tracked_server_flows.insert(flow, cid);
 
                             self.cache.update_primer_server_hello(&flow.reversed_clone(), sh.cipher_suite, sh.server_random.clone());
                         }
@@ -250,7 +264,7 @@ impl FlowTracker {
                             // replace flow with new overflow one
                             self.cache.update_primer_certificate(&flow.reversed_clone(), pub_key, sig_alg);
                             let cid = self.tracked_server_flows.remove(&flow).unwrap();
-                            self.tracked_server_flows.insert(flow.clone(), cid);
+                            self.tracked_server_flows.insert(flow, cid);
                         }
                         None => {/*println!("got no cert");*/}
 
@@ -273,44 +287,16 @@ impl FlowTracker {
 
     fn flush_to_db(&mut self) {
         let pcache = self.cache.flush_primers();
-        let c4cache = self.cache.flush_ipv4connections();
-        let c6cache = self.cache.flush_ipv6connections();
 
         let dsn = self.dsn.clone().unwrap();
         thread::spawn(move || {
             let inserter_thread_start = time::now();
             let mut thread_db_conn = Client::connect(&dsn, NoTls).unwrap();
 
-            let insert_ipv4conn = match thread_db_conn.prepare(
-                "INSERT
-                INTO ipv4connections (id, sid, anon_cli_ip, server_ip, SNI)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT DO NOTHING;")
-            {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    println!("Preparing insert_ipv4conn failed: {}", e);
-                    return;
-                }
-            };
-
-            let insert_ipv6conn = match thread_db_conn.prepare(
-                "INSERT
-                INTO ipv6connections (id, sid, anon_cli_ip, server_ip, SNI)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT DO NOTHING;")
-            {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    println!("Preparing insert_ipv6conn failed: {}", e);
-                    return;
-                }
-            };
-
             let insert_primer = match thread_db_conn.prepare(
                 "INSERT
                 INTO primers (
-                    id,
+                    server_ip,
                     client_random,
                     server_random,
                     server_params,
@@ -331,26 +317,10 @@ impl FlowTracker {
             };
 
             for (_k, primer) in pcache {
-                let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.id as i64), &(primer.client_random),
+                let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.server_ip), &(primer.client_random),
                     &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key), &(primer.signature), &(primer.sig_alg)]);
                 if updated_rows.is_err() {
                     println!("Error updating primers: {:?}", updated_rows)
-                }
-            }
-
-            for ipv4c in c4cache {
-                let updated_rows = thread_db_conn.execute(&insert_ipv4conn, &[&(ipv4c.id as i64), &(ipv4c.sid as i64),
-                    &(ipv4c.anon_cli_ip), &(ipv4c.serv_ip), &(ipv4c.sni)]);
-                if updated_rows.is_err() {
-                    println!("Error updating ipv4connections: {:?}", updated_rows);
-                }
-            }
-
-            for ipv6c in c6cache {
-                let updated_rows = thread_db_conn.execute(&insert_ipv6conn, &[&(ipv6c.id as i64), &(ipv6c.sid as i64),
-                    &(ipv6c.anon_cli_ip), &(ipv6c.serv_ip), &(ipv6c.sni)]);
-                if updated_rows.is_err() {
-                    println!("Error updating ipv6connections: {:?}", updated_rows);
                 }
             }
 
@@ -365,9 +335,9 @@ impl FlowTracker {
         // to do a second check on overdueness, and this is simplest.
         self.stale_drops.push_back(TimedFlow {
             event_time: Instant::now(),
-            flow: flow.clone(),
+            flow: *flow,
         });
-        self.tracked_flows.insert(flow.clone());
+        self.tracked_flows.insert(*flow);
     }
 
     fn begin_tracking_server_flow(&mut self, flow: &Flow, cid: i64) {
@@ -375,9 +345,9 @@ impl FlowTracker {
         // to do a second check on overdueness, and this is simplest.
         self.stale_server_drops.push_back(TimedFlow {
             event_time: Instant::now(),
-            flow: flow.clone(),
+            flow: *flow,
         });
-        self.tracked_server_flows.insert(flow.clone(), cid);
+        self.tracked_server_flows.insert(*flow, cid);
     }
 
     // not called internally, has to be called externally
