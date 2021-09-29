@@ -110,7 +110,6 @@ impl StatsTracker {
             ParseError::KeyShareExtLenMisparse |
             ParseError::PskKeyExchangeModesExtShort |
             ParseError::PskKeyExchangeModesExtLenMisparse |
-            ParseError::SupportedVersionsExtShort |
             ParseError::SupportedVersionsExtLenMisparse => {
                 println!("{:?}", err);
                 self.extension_misparsed += 1;
@@ -124,10 +123,6 @@ impl StatsTracker {
             ParseError::UnknownAlertMessage => {
                 println!("{:?}", err);
                 self.alert_misparsed += 1;
-            }
-            ParseError::MissedServerResponse => {
-                println!("{:?}", err);
-                self.primer_misparsed += 1;
             }
             ParseError::NotAServerHello => {
                 panic!("Got NotAServerHello error from parsing ClientHello")

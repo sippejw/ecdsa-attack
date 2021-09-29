@@ -10,7 +10,7 @@ use pnet::packet::Packet;
 use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum};
 
 use std::collections::{HashSet, HashMap, VecDeque};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr};
 use std::ops::Sub;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -200,7 +200,7 @@ impl FlowTracker {
                         Ok(fp) => {
                             self.stats.primers_created += 1;
                             let mut addr = None;
-                            match source {
+                            match destination {
                                 IpAddr::V4(serv_ip) => {
                                     addr = Some(u8array_to_u32_be(serv_ip.octets()));
                                 }
@@ -234,7 +234,7 @@ impl FlowTracker {
         }
 
         // check for ServerHello
-        if !is_client && self.tracked_server_flows.contains_key(&flow) {
+        if !is_client && self.tracked_server_flows.contains_key(&flow) && self.tracked_tcp_remainders.contains_key(&flow.reversed_clone()) {
             // reassign flow to get the one with the correct overflow & cipher_suite
             for (&key, _) in self.tracked_server_flows.iter() {
                 if key == flow {
@@ -272,7 +272,6 @@ impl FlowTracker {
 
                     match fp.get_server_key_exchange() {
                         Some(ske) => {
-                            println!("server key exchange: {}", ske);
                             self.cache.update_primer_ske(&flow.reversed_clone(), ske.server_params.clone(), ske.signature.clone());
                             self.tracked_server_flows.remove(&flow);
                         }

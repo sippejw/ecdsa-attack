@@ -1,10 +1,8 @@
 extern crate time;
 
 use std::collections::{HashSet, HashMap};
-use common::{Flow, ConnectionIPv4, u8_to_u16_be, u8_to_u32_be, u8array_to_u32_be};
-use std::net::IpAddr;
+use common::{Flow};
 use tls_structs::{CipherSuite, Primer, TlsAlertMessage, TlsHandshakeType};
-use stats_tracker::StatsTracker;
 
 // to ease load on db, cache queries
 pub struct MeasurementCache {
@@ -16,7 +14,6 @@ pub struct MeasurementCache {
 }
 
 pub const MEASUREMENT_CACHE_FLUSH: i64 = 60; // every min
-pub const CONNECTION_SID_WAIT_TIMEOUT: i64 = 10; // 10 secs
 
 impl MeasurementCache {
     pub fn new() -> MeasurementCache {
@@ -50,7 +47,6 @@ impl MeasurementCache {
     {
         match self.primers_new.get_mut(&flow) {
             Some(mut primer) => {
-                println!("Adding public key");
                 primer.pub_key = pub_key;
                 primer.sig_alg = sig_alg;
                 primer.next_state = TlsHandshakeType::ServerKeyExchange;
@@ -63,7 +59,6 @@ impl MeasurementCache {
     {
         match self.primers_new.get_mut(&flow) {
             Some(mut primer) => {
-                println!("Add server params");
                 primer.server_params = sp;
                 primer.signature = sig;
                 primer.next_state = TlsHandshakeType::ClientKeyExchange;
@@ -114,7 +109,6 @@ impl MeasurementCache {
                 stale_primer_flows.insert(*flow);
             }
             else if curr_time - primer.start_time > MEASUREMENT_CACHE_FLUSH {
-                println!("Removing stale primer");
                 stale_primer_flows.insert(*flow);
             }
         }

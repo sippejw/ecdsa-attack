@@ -1,7 +1,7 @@
 extern crate num;
 extern crate openssl;
 
-use crate::tls_structs::{TCPRemainder, TLSRecord};
+use crate::tls_structs::{TCPRemainder};
 
 use self::num::FromPrimitive;
 use self::openssl::x509::X509;
@@ -142,7 +142,7 @@ pub fn find_server_hello(a: &[u8], record_type: Option<TlsRecordType>, record_tl
     Ok(sh)
 }
 
-pub fn find_certificate(a: &[u8], record_type: Option<TlsRecordType>, fl: &mut Flow) -> ServerCertificateParseResult {
+pub fn find_certificate(a: &[u8], record_type: Option<TlsRecordType>, _fl: &mut Flow) -> ServerCertificateParseResult {
 
     if record_type != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
@@ -172,7 +172,7 @@ pub fn find_certificate(a: &[u8], record_type: Option<TlsRecordType>, fl: &mut F
     }
 }
 
-pub fn find_certificate_status(a: &[u8], record_type: Option<TlsRecordType>, fl: &mut Flow) -> ServerCertificateStatusParseResult {
+pub fn find_certificate_status(a: &[u8], record_type: Option<TlsRecordType>, _fl: &mut Flow) -> ServerCertificateStatusParseResult {
     if record_type != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
     }
@@ -273,7 +273,6 @@ pub fn from_try(a: &[u8], fl: &mut Flow, remainder: &mut TCPRemainder) -> Server
         Some(ref tls) => {
             match find_server_hello(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), tls.tls_version, fl) {
                 Ok(sh) => {
-                    println!("Found server hello");
                     sr.server_hello = enum_primitive::Option::Some(sh);
                     packet = remainder.get_tls_record(None);
                 }
@@ -288,7 +287,6 @@ pub fn from_try(a: &[u8], fl: &mut Flow, remainder: &mut TCPRemainder) -> Server
         Some(ref tls) => {
             match find_certificate(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), fl) {
                 Ok(cert) => {
-                    println!("Found certificate");
                     sr.cert = enum_primitive::Option::Some(cert);
                     packet = remainder.get_tls_record(None);
                 }
@@ -303,7 +301,6 @@ pub fn from_try(a: &[u8], fl: &mut Flow, remainder: &mut TCPRemainder) -> Server
         Some(ref tls) => {
             match find_certificate_status(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), fl) {
                 Ok(status) => {
-                    println!("Found certificate status");
                     sr.cert_status = enum_primitive::Option::Some(status);
                     packet = remainder.get_tls_record(None);
                 }
@@ -317,9 +314,7 @@ pub fn from_try(a: &[u8], fl: &mut Flow, remainder: &mut TCPRemainder) -> Server
         Some(ref tls) => {
             match find_server_key_exchange(tls.data.clone().as_slice(), TlsRecordType::from_u8(tls.content_type), fl) {
                 Ok(ske) => {
-                    println!("Found ske");
                     sr.server_key_exchange = enum_primitive::Option::Some(ske);
-                    packet = remainder.get_tls_record(None);
                 }
                 Err(_) => {} // didn't find a server key exchange 
             }

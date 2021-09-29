@@ -3,8 +3,6 @@ extern crate crypto;
 
 use pnet::packet::tcp::TcpPacket;
 
-use crate::tls_structs::TCPRemainder;
-
 use self::crypto::digest::Digest;
 
 use tls_structs::CipherSuite;
@@ -40,7 +38,6 @@ pub enum ParseError {
     KeyShareExtLenMisparse,
     PskKeyExchangeModesExtShort,
     PskKeyExchangeModesExtLenMisparse,
-    SupportedVersionsExtShort,
     SupportedVersionsExtLenMisparse,
 
     NotACertificate,
@@ -51,8 +48,6 @@ pub enum ParseError {
     UnImplementedCurveType,
 
     NotACiphersuite,
-
-    MissedServerResponse
 }
 
 #[derive(Copy, Clone, Debug)]
