@@ -219,7 +219,6 @@ pub fn find_server_key_exchange(a: &[u8], record_type: Option<TlsRecordType>, fl
     match a[of] {
         0x03 => {params.extend(a[of+1..of+3].iter());}
         _ => {
-            println!("unknown type of curve");
             return Err(ParseError::UnImplementedCurveType);
         }
     }
@@ -241,6 +240,11 @@ pub fn find_server_key_exchange(a: &[u8], record_type: Option<TlsRecordType>, fl
             let mut tmp_sig: Vec<u8> = Vec::new();
             tmp_sig.extend(a[of..of+2].iter());
             let sig_len = u8_to_u16_be(a[of+2], a[of+3]) as usize;
+            // we are having an issue where sign_len is orders of magnitude larger than a.len()
+            // need to figure out why
+            if a.len() < of + 2 + sig_len + 2 {
+                return Err(ParseError::SignatureLenMisparse);
+            }
             tmp_sig.extend(a[of+2..of+2+sig_len+2].iter()); // extra two bytes is to include the length of signature
             sig = Some(tmp_sig);
         }

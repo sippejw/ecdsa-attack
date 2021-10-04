@@ -47,6 +47,9 @@ pub enum ParseError {
     NoServerKeyExchange,
     UnImplementedCurveType,
 
+    NoPublicKey,
+    SignatureLenMisparse,
+
     NotACiphersuite,
 }
 

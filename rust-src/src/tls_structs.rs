@@ -966,6 +966,9 @@ pub struct ClientKeyExchange {
 pub type ClientKeyExchangeParseResult = Result<ClientKeyExchange, ParseError>;
 impl ClientKeyExchange {
     pub fn from_try(a: &[u8]) -> ClientKeyExchangeParseResult {
+        if a.len() < 10 {
+            return Err(ParseError::ShortBuffer)
+        }
         let record_type = a[0];
         if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
             return Err(ParseError::NotAHandshake)
@@ -987,6 +990,10 @@ impl ClientKeyExchange {
         }
 
         let pub_key_len = a[9] as usize;
+        if pub_key_len < 10 {
+            // When/why does this happen?
+            return Err(ParseError::NoPublicKey)
+        }
         let pub_key = a[10 .. pub_key_len].to_vec();
 
         let cke = ClientKeyExchange {

@@ -24,14 +24,14 @@ INCLUDE    = -I${PFRING_KERNEL} -I${PFRING_KERNEL}/plugins -I${PFRINGDIR} -I${PF
 # C compiler and flags
 #
 CC         = gcc
-CFLAGS     =  -O2 -DHAVE_PF_RING -Wall ${INCLUDE} -DENABLE_BPF -D HAVE_PF_RING_ZC # -g
+CFLAGS     =  -O2 -DHAVE_PF_RING -Wall ${INCLUDE} -DENABLE_BPF -D HAVE_PF_RING_ZC
 #CFLAGS     += -g
 
 #
 # User and System libraries
 #
 DEBUG_OR_RELEASE = release
-LIBS       =  ${LIBPFRING} ${LIBPCAP} `${PFRINGDIR}/pfring_config --libs` -lpthread -lrt -Lrust-src/target/${DEBUG_OR_RELEASE} -ltls_fingerprint -ldl -lm -lssl -lcrypto
+LIBS       =  ${LIBPFRING} ${LIBPCAP} `${PFRINGDIR}/pfring_config --libs` -lrt -Lrust-src/target/${DEBUG_OR_RELEASE} -lrsa_faulty_signatures -ldl -lm -L/usr/local/lib -lssl -lcrypto -lpthread
 
 all: rsa-faulty-signatures
 

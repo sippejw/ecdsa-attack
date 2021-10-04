@@ -18,3 +18,4 @@ Cargo.lock
 VerifyPcap
 rust-src/target/
 .DS_Store
+rsa-faulty-signatures

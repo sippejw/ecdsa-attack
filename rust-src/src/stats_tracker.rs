@@ -17,6 +17,8 @@ pub struct StatsTracker {
     pub not_a_client_key_exchange: u64,
     pub alert_misparsed: u64,
     pub primer_misparsed: u64,
+    pub client_key_exchange_misparsed: u64,
+    pub server_key_exchange_misparsed: u64,
 }
 
 impl StatsTracker {
@@ -34,6 +36,8 @@ impl StatsTracker {
             not_a_client_key_exchange: 0,
             alert_misparsed: 0,
             primer_misparsed: 0,
+            client_key_exchange_misparsed: 0,
+            server_key_exchange_misparsed: 0,
         }
     }
 
@@ -82,6 +86,11 @@ impl StatsTracker {
         self.not_a_clienthello = 0;
         self.extension_misparsed = 0;
         self.client_hello_misparsed = 0;
+        self.not_a_client_key_exchange = 0;
+        self.alert_misparsed = 0;
+        self.primer_misparsed = 0;
+        self.client_key_exchange_misparsed = 0;
+        self.server_key_exchange_misparsed = 0;
 
         self.last_print = curr_time;
     }
@@ -117,6 +126,14 @@ impl StatsTracker {
             ParseError::NotAClientKeyExchange => {
                 println!("{:?}", err);
                 self.not_a_client_key_exchange += 1;
+            }
+            ParseError::NoPublicKey => {
+                println!("{:?}", err);
+                self.client_key_exchange_misparsed += 1;
+            }
+            ParseError::SignatureLenMisparse => {
+                println!("{:?}", err);
+                self.server_key_exchange_misparsed += 1;
             }
             ParseError::NotAnAlert |
             ParseError::UnknownAlertLevel |

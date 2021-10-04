@@ -189,7 +189,7 @@ impl FlowTracker {
                                     }
                                 }
                                 // If not TLS Alert, send original error message
-                                Err(_err) => {println!("err: {:?}", err)}
+                                Err(_err) => {}
                             }
                         }
                     }
