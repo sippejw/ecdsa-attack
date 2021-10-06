@@ -66,13 +66,19 @@ impl StatsTracker {
         }
 
         println!("[STATS] primers: found {:.2} with {:.2} completed; \
-         not a CH: {:.2} misparsed CH: {:.2} misparsed extension: {:2}; \
+         not a CH: {:.2} misparsed CH: {:.2} misparsed extension: {:.2}; \
+         misparsed CKE: {:.2} not a CKE {:.2}; \
+         misparsed alert: {:.2} misparsed SKE: {:.2}; \
          packets: {:.2} (bad_checksums: {:.2}); Gbps: {:.4}",
                  self.primers_created as f64 / diff_float,
                  self.primers_completed as f64 / diff_float,
                  self.not_a_clienthello as f64 / diff_float,
                  self.client_hello_misparsed as f64 / diff_float,
                  self.extension_misparsed as f64 / diff_float,
+                 self.client_key_exchange_misparsed as f64 / diff_float,
+                 self.not_a_client_key_exchange as f64 / diff_float,
+                 self.alert_misparsed as f64 / diff_float,
+                 self.server_key_exchange_misparsed as f64 / diff_float,
                  self.all_packets_total as f64 / diff_float,
                  self.bad_checksums as f64 / diff_float,
                  self.bytes_processed as f64 / (BYTES_TO_GBPS * diff_float),
