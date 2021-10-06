@@ -1,5 +1,5 @@
 extern crate time;
-
+extern crate num;
 use postgres::{Client, NoTls};
 
 use pnet::packet::ethernet::EthernetPacket;
@@ -19,9 +19,11 @@ use cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use common::{TimedFlow, Flow, u8array_to_u32_be};
 use stats_tracker::StatsTracker;
 use tls_parser;
-use tls_structs::{CipherSuite, ClientHello, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, TlsHandshakeType};
+use tls_structs::{CipherSuite, ClientHello, Primer, TlsAlert, ClientKeyExchange, TlsAlertLevel, TlsHandshakeType, TlsRecordType};
 
 use crate::tls_structs::TCPRemainder;
+
+use self::num::FromPrimitive;
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -145,7 +147,7 @@ impl FlowTracker {
         } else {
             return
         }
-        let mut flow = Flow::new(&source, &destination, &tcp_pkt, 0, CipherSuite::TlsNullWithNullNull);
+        let mut flow = Flow::new(&source, &destination, &tcp_pkt, CipherSuite::TlsNullWithNullNull);
         let tcp_flags = tcp_pkt.get_flags();
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.begin_tracking_flow(&flow, tcp_pkt.packet().to_vec());
@@ -165,70 +167,70 @@ impl FlowTracker {
         // check for ClientHello
         if is_client && self.tracked_flows.contains(&flow) {
             let next_state = self.cache.get_primer_state(&flow);
-            match next_state {
-                TlsHandshakeType::ClientKeyExchange => {
-                    match ClientKeyExchange::from_try(tcp_pkt.payload()) {
-                        Ok(_cke) => {
-                            if self.cache.update_primer_complete(&flow) {
-                                self.stats.primers_completed += 1;
-                            }
-                            self.tracked_flows.remove(&flow);
-                            self.tracked_tcp_remainders.remove(&flow);
-                        }
-                        // If not Client Key Exchange, try TLS Alert
-                        Err(err) => {
-                            match TlsAlert::from_try(tcp_pkt.payload()) {
-                                Ok(alert) => {
-                                    self.cache.update_primer_with_alert(&flow, alert.description);
-                                    if alert.level == TlsAlertLevel::Fatal {
-                                        if self.cache.update_primer_complete(&flow) {
-                                            self.stats.primers_completed += 1;
+            let tcp_remainder = self.tracked_tcp_remainders.get_mut(&flow).unwrap();
+            let tls_packet = tcp_remainder.get_tls_record(Some(tcp_pkt.payload()));
+            match tls_packet {
+                Some(ref tls) => {
+                    match next_state {
+                        TlsHandshakeType::ClientKeyExchange => {
+                            match ClientKeyExchange::from_try(tls.data.as_slice(), TlsRecordType::from_u8(tls.content_type)) {
+                                Ok(_cke) => {
+                                    if self.cache.update_primer_complete(&flow) {
+                                        self.stats.primers_completed += 1;
+                                    }
+                                    self.tracked_flows.remove(&flow);
+                                    self.tracked_tcp_remainders.remove(&flow);
+                                }
+                                // If not Client Key Exchange, try TLS Alert
+                                Err(_err) => {
+                                    match TlsAlert::from_try(tls.data.as_slice(), TlsRecordType::from_u8(tls.content_type)) {
+                                        Ok(alert) => {
+                                            self.cache.update_primer_with_alert(&flow, alert.description);
+                                            if alert.level == TlsAlertLevel::Fatal {
+                                                if self.cache.update_primer_complete(&flow) {
+                                                    self.stats.primers_completed += 1;
+                                                }
+                                                self.tracked_flows.remove(&flow);
+                                                self.tracked_tcp_remainders.remove(&flow);
+                                            }
                                         }
-                                        self.tracked_flows.remove(&flow);
-                                        self.tracked_tcp_remainders.remove(&flow);
+                                        // If not TLS Alert, send original error message
+                                        Err(_err) => {}
                                     }
                                 }
-                                // If not TLS Alert, send original error message
-                                Err(_err) => {}
                             }
                         }
-                    }
-                }
-                // If no Primer exists we start Client Hello
-                TlsHandshakeType::ClientHello => {
-                    match ClientHello::from_try(tcp_pkt.payload()) {
-                        Ok(fp) => {
-                            self.stats.primers_created += 1;
-                            let mut addr = None;
-                            match destination {
-                                IpAddr::V4(serv_ip) => {
-                                    addr = Some(u8array_to_u32_be(serv_ip.octets()));
+                        // If no Primer exists we start Client Hello
+                        TlsHandshakeType::ClientHello => {
+                            match ClientHello::from_try(tls.data.as_slice(), TlsRecordType::from_u8(tls.content_type), tls.tls_version) {
+                                Ok(fp) => {
+                                    self.stats.primers_created += 1;
+                                    let mut addr = None;
+                                    match destination {
+                                        IpAddr::V4(serv_ip) => {
+                                            addr = Some(u8array_to_u32_be(serv_ip.octets()));
+                                        }
+                                        _ => {}
+                                    }
+                                    let fp_id = fp.get_fingerprint();
+                                    let primer = Primer::new(addr, fp.client_random.clone(), fp_id);
+
+                                    self.begin_tracking_server_flow(&flow.reversed_clone(), primer.cid as i64);
+
+                                    // insert primer
+                                    self.cache.add_primer(&flow, primer);
                                 }
-                                _ => {}
-                            }
-                            let primer = Primer::new(addr, fp.client_random.clone());
-
-                            self.begin_tracking_server_flow(&flow.reversed_clone(), primer.id as i64);
-
-                            let curr_time = time::now();
-                            // insert primer
-                            self.cache.add_primer(&flow, primer);
-                            if self.write_to_db {
-                                // once in a while -- flush everything
-                                if curr_time.to_timespec().sec - self.cache.last_flush.to_timespec().sec >
-                                    MEASUREMENT_CACHE_FLUSH {
-                                    self.flush_to_db()
+                                Err(err) => {
+                                    self.stats.store_clienthello_error(err);
                                 }
                             }
                         }
-                        Err(err) => {
-                            self.stats.store_clienthello_error(err);
-                        }
+
+                        // Any other types we'll defer. Cache will clear stale primers
+                        _ => {}
                     }
                 }
-
-                // Any other types we'll defer. Cache will clear stale primers
-                _ => {}
+                None => {}
             }
             return;
         }
@@ -236,12 +238,8 @@ impl FlowTracker {
         // check for ServerHello
         if !is_client && self.tracked_server_flows.contains_key(&flow) && self.tracked_tcp_remainders.contains_key(&flow.reversed_clone()) {
             // reassign flow to get the one with the correct overflow & cipher_suite
-            for (&key, _) in self.tracked_server_flows.iter() {
-                if key == flow {
-                    flow = key;
-                    break;
-                }
-            }
+            flow = *self.tracked_server_flows.get_key_value(&flow).unwrap().0;
+
             let tcp_remainder = self.tracked_tcp_remainders.get_mut(&flow.reversed_clone());
 
             match tls_parser::from_try(tcp_pkt.payload(), &mut flow, &mut tcp_remainder.unwrap()) {
@@ -282,6 +280,14 @@ impl FlowTracker {
                 Err(err) => {println!("err: {:?}", err)}
             }
         }
+
+        if self.write_to_db {
+            // once in a while -- flush everything
+            if time::now().to_timespec().sec - self.cache.last_flush.to_timespec().sec >
+                MEASUREMENT_CACHE_FLUSH {
+                self.flush_to_db()
+            }
+        }
     }
 
     fn flush_to_db(&mut self) {
@@ -303,8 +309,11 @@ impl FlowTracker {
                     tls_alert,
                     pub_key,
                     signature,
-                    sig_alg)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    sig_alg,
+                    time_start,
+                    time_complete,
+                    cid)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 ON CONFLICT DO NOTHING;"
             )
             {
@@ -317,7 +326,7 @@ impl FlowTracker {
 
             for (_k, primer) in pcache {
                 let updated_rows = thread_db_conn.execute(&insert_primer, &[&(primer.server_ip), &(primer.client_random),
-                    &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key), &(primer.signature), &(primer.sig_alg)]);
+                    &(primer.server_random), &(primer.server_params), &(primer.cipher_suite as i16), &(primer.alert_message as i8), &(primer.pub_key), &(primer.signature), &(primer.sig_alg), &(primer.start_time), &(primer.complete_time), &(primer.cid)]);
                 if updated_rows.is_err() {
                     println!("Error updating primers: {:?}", updated_rows)
                 }

@@ -87,6 +87,7 @@ impl MeasurementCache {
     {
         match self.primers_new.get_mut(&flow) {
             Some(mut primer) => {
+                primer.complete_time = time::now().to_timespec().sec;
                 primer.is_complete = true;
                 return true;
             },

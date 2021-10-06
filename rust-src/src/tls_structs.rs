@@ -10,7 +10,7 @@ use self::crypto::sha1::Sha1;
 use self::hex_slice::AsHex;
 use self::openssl::x509::X509;
 
-use common::{hash_u64, ParseError, u8_to_u16_be, u8_to_u32_be, vec_u8_to_vec_u16_be};
+use common::{hash_u32, ParseError, u8_to_u16_be, u8_to_u32_be, vec_u8_to_vec_u16_be};
 use tls_parser;
 
 use self::num::FromPrimitive;
@@ -669,7 +669,7 @@ pub enum HasSignature {
 
 #[derive(Clone)]
 pub struct Primer {
-    pub id: u64,
+    pub cid: i64,
     pub server_ip: Option<u32>,
     pub client_random: Vec<u8>,
     pub server_random: Vec<u8>,
@@ -682,19 +682,14 @@ pub struct Primer {
     pub sig_alg: i32,
     pub signature: Option<Vec<u8>>,
     pub next_state: TlsHandshakeType,
+    pub complete_time: i64,
 }
 
 impl Primer {
-    pub fn new(server_ip: Option<u32>, cli_random: Vec<u8>) -> Primer {
-        let mut hasher = Sha1::new();
+    pub fn new(server_ip: Option<u32>, cli_random: Vec<u8>, id: u64) -> Primer {
         let curr_time = time::now().to_timespec().sec;
-        hash_u64(&mut hasher, curr_time as u64);
-        hash_u64(&mut hasher, BigEndian::read_u64(&cli_random[0..8]));
-        let mut result = [0; 20];
-        hasher.result(&mut result);
-        let id = BigEndian::read_u64(&result[0..8]);
         Primer {
-            id: id,
+            cid: id as i64,
             server_ip: server_ip,
             client_random: cli_random,
             server_random: Vec::new(),
@@ -707,6 +702,7 @@ impl Primer {
             sig_alg: 0,
             signature: Some(Vec::new()),
             next_state: TlsHandshakeType::ServerHello,
+            complete_time: 0,
         }
     }
 }
@@ -752,43 +748,30 @@ pub struct ClientHello {
 pub type ClientHelloParseResult = Result<ClientHello, ParseError>;
 
 impl ClientHello {
-    pub fn from_try(a: &[u8]) -> ClientHelloParseResult {
-        if a.len() < 42 {
-            return Err(ParseError::ShortBuffer);
-        }
-
-        let record_type = a[0];
-        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+    pub fn from_try(a: &[u8], record_type: Option<TlsRecordType>, record_tls_version: TlsVersion) -> ClientHelloParseResult {
+        if record_type != Some(TlsRecordType::Handshake) {
             return Err(ParseError::NotAHandshake);
         }
 
-        let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
-            Some(tls_version) => tls_version,
-            None => return Err(ParseError::UnknownRecordTLSVersion),
-        };
+        let record_length = a.len();
 
-        let record_length = u8_to_u16_be(a[3], a[4]);
-        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-            return Err(ParseError::ShortOuterRecord);
-        }
-
-        if TlsHandshakeType::from_u8(a[5]) != Some(TlsHandshakeType::ClientHello) {
+        if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::ClientHello) {
             return Err(ParseError::NotAClientHello);
         }
 
-        let ch_length = u8_to_u32_be(0, a[6], a[7], a[8]);
+        let ch_length = u8_to_u32_be(0, a[1], a[2], a[3]);
         if ch_length != record_length as u32 - 4 {
             return Err(ParseError::InnerOuterRecordLenContradict);
         }
 
-        let ch_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[9], a[10])) {
+        let ch_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[4], a[5])) {
             Some(tls_version) => tls_version,
             None => return Err(ParseError::UnknownChTLSVersion),
         };
 
         // 32 bytes of client random
 
-        let mut offset: usize = 11;
+        let mut offset: usize = 6;
         let c_random = tls_parser::ungrease_u8(&a[offset..offset+32]);
         offset += 32;
 
@@ -940,6 +923,58 @@ impl ClientHello {
         self.extensions.append(&mut tls_parser::ungrease_u8(ext_id_u8));
         Ok(())
     }
+
+    pub fn get_fingerprint(&self) -> u64 {
+        //let mut s = DefaultHasher::new(); // This is SipHasher13, nobody uses this...
+        //let mut s = SipHasher24::new_with_keys(0, 0);
+        // Fuck Rust's deprecated "holier than thou" bullshit attitude
+        // We'll use Sha1 instead...
+
+        let mut hasher = Sha1::new();
+        let versions = (self.record_tls_version as u32) << 16 | (self.ch_tls_version as u32);
+        hash_u32(&mut hasher, versions);
+
+
+        hash_u32(&mut hasher, self.cipher_suites.len() as u32);
+        hasher.input(&self.cipher_suites);
+
+        hash_u32(&mut hasher, self.compression_methods.len() as u32);
+        hasher.input(&self.compression_methods);
+
+        hash_u32(&mut hasher, self.extensions.len() as u32);
+        hasher.input(&self.extensions);
+
+        hash_u32(&mut hasher, self.named_groups.len() as u32);
+        hasher.input(&self.named_groups);
+
+        hash_u32(&mut hasher, self.ec_point_fmt.len() as u32);
+        hasher.input(&self.ec_point_fmt);
+
+        hash_u32(&mut hasher, self.sig_algs.len() as u32);
+        hasher.input(&self.sig_algs);
+
+        hash_u32(&mut hasher, self.alpn.len() as u32);
+        hasher.input(&self.alpn);
+
+        hash_u32(&mut hasher, self.key_share.len() as u32);
+        hasher.input(&self.key_share);
+
+        hash_u32(&mut hasher, self.psk_key_exchange_modes.len() as u32);
+        hasher.input(&self.psk_key_exchange_modes);
+
+        hash_u32(&mut hasher, self.supported_versions.len() as u32);
+        hasher.input(&self.supported_versions);
+
+        hash_u32(&mut hasher, self.cert_compression_algs.len() as u32);
+        hasher.input(&self.cert_compression_algs);
+
+        hash_u32(&mut hasher, self.record_size_limit.len() as u32);
+        hasher.input(&self.record_size_limit);
+
+        let mut result = [0; 20];
+        hasher.result(&mut result);
+        BigEndian::read_u64(&result[0..8])
+    }
 }
 
 impl fmt::Display for ClientHello {
@@ -965,36 +1000,21 @@ pub struct ClientKeyExchange {
 
 pub type ClientKeyExchangeParseResult = Result<ClientKeyExchange, ParseError>;
 impl ClientKeyExchange {
-    pub fn from_try(a: &[u8]) -> ClientKeyExchangeParseResult {
-        if a.len() < 10 {
-            return Err(ParseError::ShortBuffer)
-        }
-        let record_type = a[0];
-        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
+    pub fn from_try(a: &[u8], record_type: Option<TlsRecordType>) -> ClientKeyExchangeParseResult {
+        if record_type != Some(TlsRecordType::Handshake) {
             return Err(ParseError::NotAHandshake)
         }
-
-        let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
-            Some(tls_version) => tls_version,
-            None => return Err(ParseError::UnknownRecordTLSVersion)
-        };
-
-        let record_length = u8_to_u16_be(a[3], a[4]);
-        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-            return Err(ParseError::ShortOuterRecord);
-        }
-
-        let handshake_type = a[5];
+        let handshake_type = a[0];
         if TlsHandshakeType::from_u8(handshake_type) != Some(TlsHandshakeType::ClientKeyExchange) {
             return Err(ParseError::NotAClientKeyExchange)
         }
 
-        let pub_key_len = a[9] as usize;
-        if pub_key_len < 10 {
+        let pub_key_len = a[4] as usize;
+        if pub_key_len > a.len() {
             // When/why does this happen?
             return Err(ParseError::NoPublicKey)
         }
-        let pub_key = a[10 .. pub_key_len].to_vec();
+        let pub_key = a[4 .. pub_key_len].to_vec();
 
         let cke = ClientKeyExchange {
             pub_key: pub_key,
@@ -1012,29 +1032,19 @@ pub struct TlsAlert {
 
 pub type TlsAlertParseResult = Result<TlsAlert, ParseError>;
 impl TlsAlert {
-    pub fn from_try(a: &[u8]) -> TlsAlertParseResult {
-
-        let record_type = a[0];
-        if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Alert) {
+    pub fn from_try(a: &[u8], record_type: Option<TlsRecordType>) -> TlsAlertParseResult {
+        if record_type != Some(TlsRecordType::Alert) {
             return Err(ParseError::NotAnAlert)
         }
 
-        let _record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[1], a[2])) {
-            Some(tls_version) => tls_version,
-            None => return Err(ParseError::UnknownRecordTLSVersion)
-        };
+        let record_length = a.len();
 
-        let record_length = u8_to_u16_be(a[3], a[4]);
-        if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-            return Err(ParseError::ShortOuterRecord);
-        }
-
-        let a_level = match TlsAlertLevel::from_u8(a[5]) {
+        let a_level = match TlsAlertLevel::from_u8(a[0]) {
             Some(alert_level) => alert_level,
             None => return Err(ParseError::UnknownAlertLevel)
         };
 
-        let a_message = match TlsAlertMessage::from_u8(a[5]) {
+        let a_message = match TlsAlertMessage::from_u8(a[1]) {
             Some(alert_message) => alert_message,
             None => return Err(ParseError::UnknownAlertMessage)
         };
