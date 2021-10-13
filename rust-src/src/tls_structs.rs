@@ -755,6 +755,10 @@ impl ClientHello {
 
         let record_length = a.len();
 
+	if record_length == 0 {
+            return Err(ParseError::NotAClientHello);
+        }
+
         if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::ClientHello) {
             return Err(ParseError::NotAClientHello);
         }
@@ -1012,6 +1016,10 @@ impl ClientKeyExchange {
         let pub_key_len = a[4] as usize;
         if pub_key_len > a.len() {
             // When/why does this happen?
+            return Err(ParseError::NoPublicKey)
+        }
+	if pub_key_len < 4 {
+            println!("Short pub key: {:?}", a);
             return Err(ParseError::NoPublicKey)
         }
         let pub_key = a[4 .. pub_key_len].to_vec();
@@ -1511,3 +1519,4 @@ impl fmt::Display for ServerKeyExchange {
         }
     }
 }
+

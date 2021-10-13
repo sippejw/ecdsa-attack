@@ -59,7 +59,9 @@ pub fn find_server_hello(a: &[u8], record_type: Option<TlsRecordType>, record_tl
     }
     
     let record_length = a.len();
-
+    if record_length == 0 {
+        return Err(ParseError::NotAServerHello);
+    }
     // TODO: make this more general, not just parsing hellos anymore
     if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::ServerHello) {
         return Err(ParseError::NotAServerHello);
@@ -149,7 +151,9 @@ pub fn find_certificate(a: &[u8], record_type: Option<TlsRecordType>, _fl: &mut 
     }
 
     let record_length = a.len();
-
+    if record_length == 0 {
+	return Err(ParseError::NotACertificate);
+    }
     if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::Certificate) {
         return Err(ParseError::NotACertificate);
     }
@@ -157,6 +161,10 @@ pub fn find_certificate(a: &[u8], record_type: Option<TlsRecordType>, _fl: &mut 
     let ch_length = u8_to_u32_be(0, a[1], a[2], a[3]);
     if ch_length != record_length as u32 - 4 {
         return Err(ParseError::InnerOuterRecordLenContradict);
+    }
+    if a.len() < 10 {
+	println!("Short Certificate: {:?}", a);
+	return Err(ParseError::NotFullCertificate);
     }
     let cert_len = u8_to_u32_be(0, a[7], a[8], a[9]) as usize;
 
@@ -175,6 +183,10 @@ pub fn find_certificate(a: &[u8], record_type: Option<TlsRecordType>, _fl: &mut 
 pub fn find_certificate_status(a: &[u8], record_type: Option<TlsRecordType>, _fl: &mut Flow) -> ServerCertificateStatusParseResult {
     if record_type != Some(TlsRecordType::Handshake) {
         return Err(ParseError::NotAHandshake);
+    }
+
+    if a.len() == 0 {
+	return Err(ParseError::NoCertificateStatus);
     }
 
     if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::CertificateStatus) {
@@ -196,7 +208,9 @@ pub fn find_server_key_exchange(a: &[u8], record_type: Option<TlsRecordType>, fl
     }
 
     let record_length = a.len();
-
+    if record_length == 0 {
+	return Err(ParseError::NoServerKeyExchange);
+    }
     if TlsHandshakeType::from_u8(a[0]) != Some(TlsHandshakeType::ServerKeyExchange) {
         return Err(ParseError::NoServerKeyExchange);
     }
